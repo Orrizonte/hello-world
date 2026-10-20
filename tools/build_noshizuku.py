@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+import base64
 
 base=Path("upstream")
 app=base/"app"
@@ -23,8 +24,8 @@ android {
         applicationId = "fr.externalscreen.gamepadpointer.noshizuku"
         minSdk = 34
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.4-noshizuku"
+        versionCode = 3
+        versionName = "0.4.1-noshizuku"
     }
     buildTypes {
         release { isMinifyEnabled = false }
@@ -37,7 +38,9 @@ android {
 ''')
 (src/"AndroidManifest.xml").write_text('''<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:label="Manette sans Shizuku"
+    <application android:label="Manette – Écran externe v0.4"
+        android:icon="@drawable/app_icon"
+        android:roundIcon="@drawable/app_icon"
         android:allowBackup="false" android:theme="@android:style/Theme.Material.NoActionBar"
         android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
