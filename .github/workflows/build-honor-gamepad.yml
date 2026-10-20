@@ -3,7 +3,7 @@ name: Build Shizuku-Free External Gamepad APK
 on:
   push:
     branches:
-      - build/gamepad-buttons-drag-scroll-20261020
+      - build/no-inertia-and-dual-sliders-20261020
   workflow_dispatch:
 
 permissions:
@@ -22,6 +22,8 @@ jobs:
         run: python3 tools/build_noshizuku.py
       - name: Add configurable buttons, drag and scrolling
         run: python3 tools/patch_controls.py
+      - name: Remove touch-fling scrolling and add two speed sliders
+        run: python3 tools/patch_no_inertia.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -40,6 +42,6 @@ jobs:
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.5
+          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.6
           path: upstream/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
