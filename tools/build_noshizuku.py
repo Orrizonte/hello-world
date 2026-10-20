@@ -71,7 +71,7 @@ android {
 values=src/"res/values"
 values.mkdir(exist_ok=True)
 (values/"strings.xml").write_text("""<?xml version="1.0" encoding="utf-8"?>
-<resources><string name="service_description">Transforme une manette Android en curseur virtuel sur un ecran externe. Utilise les fonctions d'accessibilite, sans Shizuku.</string></resources>
+<resources><string name="service_description">Transforme une manette Android en curseur virtuel sur un ecran externe. Utilise les fonctions Android, sans Shizuku.</string></resources>
 """)
 
 (pkg/"MainActivity.java").write_text(r'''package fr.externalscreen.gamepadpointer;
