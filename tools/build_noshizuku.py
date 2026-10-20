@@ -1,17 +1,27 @@
 from pathlib import Path
 import shutil
-import base64
 
 base=Path("upstream")
 app=base/"app"
 src=app/"src/main"
+
+# Preserve the original v0.1 launcher icon from the AR-Touchpad base
+# before replacing the application's resources.
+icon_candidates=list((src/"res").glob("mipmap-*/ic_launcher.png"))
+original_icon=max(icon_candidates,key=lambda p:p.stat().st_size).read_bytes() if icon_candidates else None
+
 for child in ("java","aidl","cpp","res"):
     p=src/child
     if p.exists(): shutil.rmtree(p)
+
 pkg=src/"java/fr/externalscreen/gamepadpointer"
 pkg.mkdir(parents=True,exist_ok=True)
 res=src/"res/xml"
 res.mkdir(parents=True,exist_ok=True)
+drawable=src/"res/drawable-nodpi"
+drawable.mkdir(parents=True,exist_ok=True)
+if original_icon:
+    (drawable/"app_icon.png").write_bytes(original_icon)
 
 (app/"build.gradle.kts").write_text(r'''
 plugins {
