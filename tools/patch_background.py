@@ -239,11 +239,11 @@ strings.write_text(s)
 # Add a direct link to Android Accessibility settings for the one-time permission.
 activity = src / "MainActivity.kt"
 s = activity.read_text()
-s = s.replace("import android.os.Bundle", "import android.content.Intent\\nimport android.provider.Settings\\nimport android.os.Bundle")
+s = s.replace("import android.os.Bundle", "import android.content.Intent\nimport android.provider.Settings\nimport android.os.Bundle")
 s = s.replace("import androidx.compose.foundation.layout.Box",
-    "import androidx.compose.foundation.layout.Box\\nimport androidx.compose.foundation.layout.padding")
+    "import androidx.compose.foundation.layout.Box\nimport androidx.compose.foundation.layout.padding")
 s = s.replace("import androidx.compose.ui.Modifier",
-    "import androidx.compose.ui.Alignment\\nimport androidx.compose.ui.Modifier\\nimport androidx.compose.ui.unit.dp\\nimport androidx.compose.material3.Button\\nimport androidx.compose.material3.Text")
+    "import androidx.compose.ui.Alignment\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.unit.dp\nimport androidx.compose.material3.Button\nimport androidx.compose.material3.Text")
 s = s.replace("                    TouchpadScreen(viewModel = viewModel)",
 '''                    TouchpadScreen(viewModel = viewModel)
                     Button(
