@@ -3,7 +3,7 @@ name: Build Shizuku-Free External Gamepad APK
 on:
   push:
     branches:
-      - build/honor-gamepad-mouse-20261020
+      - build/gamepad-buttons-drag-scroll-20261020
   workflow_dispatch:
 
 permissions:
@@ -20,6 +20,8 @@ jobs:
           git clone --depth 1 https://github.com/pgratz1/AR-Touchpad.git upstream
       - name: Build native accessibility variant without Shizuku
         run: python3 tools/build_noshizuku.py
+      - name: Add configurable buttons, drag and scrolling
+        run: python3 tools/patch_controls.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -38,6 +40,6 @@ jobs:
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.4.1
+          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.5
           path: upstream/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
