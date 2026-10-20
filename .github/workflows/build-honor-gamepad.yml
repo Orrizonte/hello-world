@@ -38,6 +38,6 @@ jobs:
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.3
+          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.4
           path: upstream/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
