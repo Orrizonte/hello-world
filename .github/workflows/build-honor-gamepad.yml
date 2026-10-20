@@ -20,6 +20,8 @@ jobs:
           git clone --depth 1 https://github.com/pgratz1/AR-Touchpad.git upstream
       - name: Apply generic-controller patch
         run: python3 tools/patch_gamepad.py
+      - name: Add background controller service
+        run: python3 tools/patch_background.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
