@@ -1,0 +1,42 @@
+name: Build Honor External Gamepad APK
+
+on:
+  push:
+    branches:
+      - build/honor-gamepad-mouse-20261020
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Apache-2.0 Android base
+        run: |
+          git clone --depth 1 https://github.com/pgratz1/AR-Touchpad.git upstream
+      - name: Apply generic-controller patch
+        run: python3 tools/patch_gamepad.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install required SDK, NDK and CMake
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264" "cmake;3.22.1"
+      - name: Build debug APK
+        working-directory: upstream
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+      - name: Publish installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Manette-Ecran-Externe-APK
+          path: upstream/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
