@@ -1,4 +1,4 @@
-name: Build Honor External Gamepad APK
+name: Build Shizuku-Free External Gamepad APK
 
 on:
   push:
@@ -18,10 +18,8 @@ jobs:
       - name: Fetch Apache-2.0 Android base
         run: |
           git clone --depth 1 https://github.com/pgratz1/AR-Touchpad.git upstream
-      - name: Apply generic-controller patch
-        run: python3 tools/patch_gamepad.py
-      - name: Add background controller service
-        run: python3 tools/patch_background.py
+      - name: Build native accessibility variant without Shizuku
+        run: python3 tools/build_noshizuku.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -40,6 +38,6 @@ jobs:
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Manette-Ecran-Externe-APK
+          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.3
           path: upstream/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
