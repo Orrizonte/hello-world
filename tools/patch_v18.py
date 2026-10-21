@@ -46,7 +46,7 @@ methods=r'''    private String projectionSnapshot() {
             b.append("display id=").append(d.getDisplayId())
              .append(" name=").append(d.getName())
              .append(" flags=").append(d.getFlags())
-             .append(" type=").append(d.getType())
+             
              .append(" size=").append(size.x).append("x").append(size.y)
              .append(" state=").append(d.getState()).append("\n");
         }
