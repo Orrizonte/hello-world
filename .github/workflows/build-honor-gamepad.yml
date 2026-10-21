@@ -3,7 +3,7 @@ name: Build Shizuku-Free External Gamepad APK
 on:
   push:
     branches:
-      - build/fix-a-tap-hold-20261020
+      - build/moonlight-passthrough-v10-20261021
   workflow_dispatch:
 
 permissions:
@@ -26,10 +26,12 @@ jobs:
         run: python3 tools/patch_no_inertia.py
       - name: Fix A left click hold and X context menu
         run: python3 tools/patch_ax.py
-      - name: Fix gestures and scrolling v0.9
+      - name: Fix gestures and scrolling v0.10
         run: python3 tools/patch_v08.py
       - name: Correct A tap vs hold v0.9
         run: python3 tools/patch_v09.py
+      - name: Moonlight input passthrough v0.10
+        run: python3 tools/patch_v10.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
