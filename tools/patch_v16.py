@@ -5,11 +5,15 @@ old='''            if((display.getFlags() & Display.FLAG_PRESENTATION)!=0) {
                 next=display;
                 break;
             }'''
-new='''            // FLAG_PRESENTATION alone is also set on some mirrored outputs.
-            // Only an own-content display is safe for an external cursor overlay.
-            int flags=display.getFlags();
-            if((flags & Display.FLAG_PRESENTATION)!=0 &&
-               (flags & Display.FLAG_OWN_CONTENT_ONLY)!=0) {
+new='''            // Mirrored outputs can advertise FLAG_PRESENTATION too.
+            // Fail closed unless Android explicitly names a desktop surface.
+            String name=display.getName();
+            String lower=name==null ? "" : name.toLowerCase(java.util.Locale.ROOT);
+            boolean desktopName=lower.contains("desktop") ||
+                                lower.contains("bureau") ||
+                                lower.contains("pc mode");
+            if((display.getFlags() & Display.FLAG_PRESENTATION)!=0 &&
+               desktopName) {
                 next=display;
                 break;
             }'''
