@@ -3,7 +3,7 @@ name: Build Shizuku-Free External Gamepad APK
 on:
   push:
     branches:
-      - build/black-screen-guard-v16-20261021
+      - build/window-based-mode-v17-20261021
   workflow_dispatch:
 
 permissions:
@@ -44,6 +44,8 @@ jobs:
         run: python3 tools/patch_v15.py
       - name: Black screen mirror guard v0.16
         run: python3 tools/patch_v16.py
+      - name: Detect desktop from windows v0.17
+        run: python3 tools/patch_v17.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -62,6 +64,6 @@ jobs:
       - name: Publish installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.16
+          name: Manette-Ecran-Externe-SANS-SHIZUKU-v0.17
           path: upstream/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
