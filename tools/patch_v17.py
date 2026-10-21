@@ -35,7 +35,7 @@ p.write_text(s)
 xml=root/"res/xml/controller_service.xml"
 x=xml.read_text()
 x=x.replace('android:accessibilityFlags="flagRequestFilterKeyEvents"',
-            'android:accessibilityFlags="flagRequestFilterKeyEvents|flagRetrieveInteractiveWindows"\\n    android:canRetrieveWindowContent="true"')
+            'android:accessibilityFlags="flagRequestFilterKeyEvents|flagRetrieveInteractiveWindows"\n    android:canRetrieveWindowContent="true"')
 xml.write_text(x)
 # Ensure window enumeration remains enabled when capture state changes.
 s=p.read_text()
