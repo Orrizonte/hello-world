@@ -3,7 +3,7 @@ name: Build Shizuku-Free External Gamepad APK
 on:
   push:
     branches:
-      - build/mirror-cursor-v14-20261021
+      - build/auto-display-safe-v15-20261021
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
         run: python3 tools/patch_no_inertia.py
       - name: Fix A left click hold and X context menu
         run: python3 tools/patch_ax.py
-      - name: Fix gestures and scrolling v0.14
+      - name: Fix gestures and scrolling v0.15
         run: python3 tools/patch_v08.py
       - name: Correct A tap vs hold v0.9
         run: python3 tools/patch_v09.py
@@ -40,6 +40,8 @@ jobs:
         run: python3 tools/patch_v13.py
       - name: Mirror cursor v0.14
         run: python3 tools/patch_v14.py
+      - name: Automatic safe display mode v0.15
+        run: python3 tools/patch_v15.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
