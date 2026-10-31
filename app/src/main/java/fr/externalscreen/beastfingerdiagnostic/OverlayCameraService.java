@@ -47,7 +47,6 @@ public final class OverlayCameraService extends Service {
     private FingertipOverlayView tipsView;
     private WindowManager.LayoutParams overlayParams;
     private FingertipDetector detector;
-    private volatile boolean snapshotRequested;
     private String detectorError;
     private int lastTipCount = -1;
     private int noTipFrames = 0;
@@ -64,7 +63,7 @@ public final class OverlayCameraService extends Service {
         if (!running) return;
         // ~12 FPS hand tracking; camera itself stays at the native 1920x1080.
         long now = SystemClock.elapsedRealtime();
-        if (!snapshotRequested && now - lastAnalysisMs.get() < 82) return;
+        if (now - lastAnalysisMs.get() < 82) return;
         if (!decodeBusy.compareAndSet(false, true)) return;
         lastAnalysisMs.set(now);
         int count = ++frames;
@@ -78,23 +77,10 @@ public final class OverlayCameraService extends Service {
                     if (count <= 3) status("Image MJPEG non décodable");
                     return;
                 }
-                if (snapshotRequested) {
-                    snapshotRequested = false;
-                    try {
-                        CalibrationFrameHolder.publish(bitmap);
-                        Intent preview = new Intent(ACTION_CALIBRATION_FRAME)
-                            .setPackage(getPackageName());
-                        sendBroadcast(preview);
-                        status("Image native de calibration : "+bitmap.getWidth()+
-                            "×"+bitmap.getHeight()+" (affichage adapté aux Beast).");
-                    } catch (Throwable e) {
-                        status("Calibration impossible : "+e);
-                    }
-                }
                 if (detector == null && detectorError == null) {
                     try {
                         detector = new FingertipDetector(getApplicationContext());
-                        status("MediaPipe initialisé : suivi des bouts des doigts.");
+                        status("MediaPipe initialisé : téléphone + bouts des doigts, suivi AUTOMATIQUE.");
                     } catch (Throwable e) {
                         StringBuilder trace=new StringBuilder(e.toString());
                         Throwable cause=e.getCause();
@@ -111,7 +97,10 @@ public final class OverlayCameraService extends Service {
                 final int hands=detector==null ? -1 : detector.lastHands();
                 final int candidates=detector==null ? 0 : detector.lastCandidates();
                 final int inside=detector==null ? 0 : detector.lastInside();
-                final boolean calibrated=detector!=null && detector.hasCalibration();
+                final boolean phoneSeen=detector!=null && detector.phoneVisible();
+                final int objects=detector==null ? 0 : detector.objectCandidates();
+                final float phoneScore=detector==null ? 0f : detector.phoneConfidence();
+                final String phoneLabel=detector==null ? "aucun" : detector.phoneLabel();
                 main.post(() -> {
                     if (!running) {
                         for (FingertipDetector.Patch p:patches) p.release();
@@ -150,13 +139,16 @@ public final class OverlayCameraService extends Service {
                     }
                     if (tips != lastTipCount) {
                         lastTipCount=tips;
-                        if(tips>0)status("Doigts visibles dans la zone : "+tips);
+                        if(tips>0)status("Bouts des doigts AU-DESSUS DU TÉLÉPHONE : "+tips);
                     }
                     if (count<=3 || count%60==0 || (hands>0 && count%15==0)) {
                         status("MediaPipe image "+count+" : camera "+sourceWidth+"×"+
                             sourceHeight+" | mains="+hands+" | pointes="+candidates+
-                            " | dans écran="+inside+" | visibles="+tips+
-                            " | calibré="+calibrated+
+                            " | téléphone="+(phoneSeen?"OUI":"NON")+
+                            " | objet="+phoneLabel+
+                            " | confiance="+(int)(phoneScore*100)+"%"+
+                            " | objets="+objects+
+                            " | au-dessus="+inside+" | visibles="+tips+
                             " | surface "+(currentDisplayId>=0?"#"+currentDisplayId:"inactive"));
                     }
                 });
@@ -199,8 +191,8 @@ public final class OverlayCameraService extends Service {
         if (intent == null) return START_NOT_STICKY;
         String action = intent.getAction();
         if (ACTION_SNAPSHOT.equals(action)) {
-            snapshotRequested = true;
-            status("Préparation de l’image pour calibrer l’écran…");
+            // Deprecated manual calibration: retained only for backwards compatibility.
+            status("Calibrage inutile : suivi automatique du téléphone activé.");
             return START_NOT_STICKY;
         }
         if (ACTION_STOP.equals(action)) {
@@ -228,7 +220,7 @@ public final class OverlayCameraService extends Service {
                 return START_NOT_STICKY;
             }
             starting = true;
-            getSharedPreferences("settings.v082", MODE_PRIVATE).edit().putBoolean("running", true).apply();
+            getSharedPreferences("settings.v083", MODE_PRIVATE).edit().putBoolean("running", true).apply();
             // Never add any overlay window while there are no detected tips.
             // The previous full-screen external window obscured the Beast view.
             status("Affichage protégé : écran des Beast intact, fenêtre créée uniquement sur les doigts.");
