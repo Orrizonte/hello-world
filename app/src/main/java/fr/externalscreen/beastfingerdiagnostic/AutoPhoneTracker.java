@@ -30,6 +30,8 @@ public final class AutoPhoneTracker implements AutoCloseable {
     private volatile float lastConfidence;
     private volatile String lastLabel="aucun";
     private volatile int detections;
+    private int frameNumber;
+    private volatile boolean lowerCropUsed;
 
     public AutoPhoneTracker(Context context) {
         BaseOptions model=BaseOptions.builder()
@@ -39,8 +41,8 @@ public final class AutoPhoneTracker implements AutoCloseable {
             ObjectDetector.ObjectDetectorOptions.builder()
                 .setBaseOptions(model)
                 .setRunningMode(RunningMode.IMAGE)
-                .setMaxResults(15)
-                .setScoreThreshold(0.16f)
+                .setMaxResults(80)
+                .setScoreThreshold(0.12f)
                 .build();
         detector=ObjectDetector.createFromOptions(context.getApplicationContext(),opts);
     }
@@ -55,32 +57,33 @@ public final class AutoPhoneTracker implements AutoCloseable {
         RectF found=null;
         float score=0f;
         String label="aucun";
+        frameNumber++;
+        lowerCropUsed=false;
         ObjectDetectorResult result=detector.detect(new BitmapImageBuilder(downscaled).build());
         detections=result.detections().size();
-        for(Detection detection:result.detections()) {
-            if(detection.categories().isEmpty())continue;
-            Category category=detection.categories().get(0);
-            String name=category.categoryName();
-            if(name==null)continue;
-            String clean=name.toLowerCase(Locale.ROOT).replace('_',' ');
-            if(!(clean.equals("cell phone") || clean.equals("mobile phone") ||
-                clean.equals("cellphone") || clean.equals("phone") ||
-                clean.equals("smartphone")))continue;
-            RectF b=detection.boundingBox();
-            if(b==null)continue;
-            float left=b.left/downscaled.getWidth();
-            float top=b.top/downscaled.getHeight();
-            float right=b.right/downscaled.getWidth();
-            float bottom=b.bottom/downscaled.getHeight();
-            if(right-left<.025f || bottom-top<.035f ||
-                right-left>.93f || bottom-top>.93f)continue;
-            if(category.score()>score) {
-                score=category.score();
-                found=new RectF(
-                    Math.max(0f,left),Math.max(0f,top),
-                    Math.min(1f,right),Math.min(1f,bottom));
-                label=name;
+        PhoneCandidate chosen=bestPhone(result,downscaled.getWidth(),
+            downscaled.getHeight(),0);
+        // Extra scan of the lower field of view if a small phone was missed
+        // among dozens of other COCO categories. No calibration is involved.
+        if(chosen==null && frameNumber%2==0 && downscaled.getHeight()>120){
+            int cropTop=downscaled.getHeight()/3;
+            Bitmap crop=Bitmap.createBitmap(downscaled,0,cropTop,
+                downscaled.getWidth(),downscaled.getHeight()-cropTop);
+            try {
+                ObjectDetectorResult bottom=detector.detect(
+                    new BitmapImageBuilder(crop).build());
+                detections+=bottom.detections().size();
+                chosen=bestPhone(bottom,downscaled.getWidth(),
+                    downscaled.getHeight(),cropTop);
+                lowerCropUsed=true;
+            }finally {
+                crop.recycle();
             }
+        }
+        if(chosen!=null){
+            found=chosen.box;
+            score=chosen.score;
+            label=chosen.label;
         }
         if(found!=null) {
             current=found;
@@ -91,12 +94,49 @@ public final class AutoPhoneTracker implements AutoCloseable {
         }
         // Tiny grace period for single-frame occlusion from fingertips, but no
         // persistent stale calibration when the phone or the head moves away.
-        if(current!=null && now-lastSeenMs<=220L)return new RectF(current);
+        if(current!=null && now-lastSeenMs<=650L)return new RectF(current);
         current=null;
         lastConfidence=0f;
         lastLabel="aucun";
         return null;
     }
+    private static final class PhoneCandidate {
+        final RectF box;
+        final float score;
+        final String label;
+        PhoneCandidate(RectF b,float s,String l){box=b;score=s;label=l;}
+    }
+
+    private static PhoneCandidate bestPhone(ObjectDetectorResult detections,
+            int fullWidth,int fullHeight,int cropTop) {
+        PhoneCandidate best=null;
+        for(Detection detection:detections.detections()){
+            if(detection.categories().isEmpty())continue;
+            Category cat=detection.categories().get(0);
+            String name=cat.categoryName();
+            if(name==null)continue;
+            String clean=name.toLowerCase(Locale.ROOT).replace('_',' ');
+            if(!(clean.equals("cell phone")||clean.equals("mobile phone")||
+                clean.equals("cellphone")||clean.equals("phone")||
+                clean.equals("smartphone")))continue;
+            if(cat.score()<.16f)continue;
+            RectF b=detection.boundingBox();
+            if(b==null)continue;
+            float l=Math.max(0f,b.left/fullWidth);
+            float t=Math.max(0f,(b.top+cropTop)/fullHeight);
+            float r=Math.min(1f,b.right/fullWidth);
+            float bottom=Math.min(1f,(b.bottom+cropTop)/fullHeight);
+            if(r-l<.018f||bottom-t<.027f||r-l>.9f||bottom-t>.94f)continue;
+            float pixelAspect=(r-l)*fullWidth/Math.max(1f,(bottom-t)*fullHeight);
+            // Most handheld phones are portrait, but modest tilt is allowed.
+            if(pixelAspect<.16f || pixelAspect>2.4f)continue;
+            if(best==null || cat.score()>best.score)
+                best=new PhoneCandidate(new RectF(l,t,r,bottom),cat.score(),name);
+        }
+        return best;
+    }
+
+    public boolean lowerCropUsed(){return lowerCropUsed;}
     public float confidence(){return lastConfidence;}
     public String label(){return lastLabel;}
     public int candidates(){return detections;}
