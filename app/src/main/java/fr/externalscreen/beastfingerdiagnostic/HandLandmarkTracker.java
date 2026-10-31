@@ -3,6 +3,7 @@ package fr.externalscreen.beastfingerdiagnostic;
 import android.content.Context;
 import android.graphics.Bitmap;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
+import com.google.mediapipe.tasks.components.containers.Landmark;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 import com.google.mediapipe.tasks.core.BaseOptions;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
@@ -40,8 +41,8 @@ final class HandLandmarkTracker implements AutoCloseable {
             .setBaseOptions(base)
             .setRunningMode(RunningMode.VIDEO)
             .setNumHands(2)
-            .setMinHandDetectionConfidence(0.45f)
-            .setMinHandPresenceConfidence(0.45f)
+            .setMinHandDetectionConfidence(0.55f)
+            .setMinHandPresenceConfidence(0.55f)
             .setMinTrackingConfidence(0.45f)
             .build();
         landmarker = HandLandmarker.createFromOptions(context.getApplicationContext(), options);
@@ -73,12 +74,24 @@ final class HandLandmarkTracker implements AutoCloseable {
                 lastTsMs = ts;
                 HandLandmarkerResult r = landmarker.detectForVideo(new BitmapImageBuilder(small).build(), ts);
                 ArrayList<float[]> out = new ArrayList<>();
-                for (List<NormalizedLandmark> hand : r.landmarks()) {
+                List<List<NormalizedLandmark>> all = r.landmarks();
+                List<List<Landmark>> world = r.worldLandmarks();
+                for (int hIdx = 0; hIdx < all.size(); hIdx++) {
+                    List<NormalizedLandmark> hand = all.get(hIdx);
                     if (hand.size() < 21) continue;
-                    float[] lm = new float[42];
+                    // 42 image coordinates (px) + 63 metric world coordinates (m)
+                    float[] lm = new float[105];
                     for (int i = 0; i < 21; i++) {
                         lm[2 * i] = hand.get(i).x() * fullW;
                         lm[2 * i + 1] = hand.get(i).y() * fullH;
+                    }
+                    if (world != null && hIdx < world.size() && world.get(hIdx).size() >= 21) {
+                        List<Landmark> wl = world.get(hIdx);
+                        for (int i = 0; i < 21; i++) {
+                            lm[42 + 3 * i] = wl.get(i).x(); lm[43 + 3 * i] = wl.get(i).y(); lm[44 + 3 * i] = wl.get(i).z();
+                        }
+                    } else {
+                        lm = java.util.Arrays.copyOf(lm, 42);
                     }
                     out.add(lm);
                 }

@@ -25,9 +25,9 @@ public class Replay {
             for (String part : lines[i].split("\\[")) {
                 if (!part.contains("]")) continue;
                 String[] v = part.substring(0, part.indexOf(']')).split(",");
-                if (v.length != 42) continue;
-                float[] lm = new float[42];
-                for (int k = 0; k < 42; k++) lm[k] = Float.parseFloat(v[k]);
+                if (v.length < 42) continue;
+                float[] lm = new float[v.length];
+                for (int k = 0; k < v.length; k++) lm[k] = Float.parseFloat(v[k]);
                 hands.add(lm);
             }
             FrameProcessor.Result r = fp.process(argb, w, h, hands, i * 33_333_333L, sw, sh, i * 33_333_333L);

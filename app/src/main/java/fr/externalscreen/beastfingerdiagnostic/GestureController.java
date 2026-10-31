@@ -25,6 +25,9 @@ public final class GestureController {
         public Event event = Event.NONE;
     }
 
+    /** thumb + middle pinch = back (off by default: a curled middle finger touches the thumb when pointing) */
+    public boolean backGesture = false;
+
     // tunables
     public float boxLeft = 0.18f, boxRight = 0.82f, boxTop = 0.15f, boxBottom = 0.80f;
     private static final float PINCH_ON = 0.28f, PINCH_OFF = 0.42f;
@@ -36,10 +39,11 @@ public final class GestureController {
     private boolean pinching, dragging, longFired, backPinch;
     private long pinchStartMs, lastSeenMs;
     private float pinchX, pinchY;
-    private int lostFrames;
+    private int lostFrames, seenFrames, pinchVotes, releaseVotes;
 
     public void reset() {
         fx.reset(); fy.reset();
+        seenFrames = 0; pinchVotes = 0; releaseVotes = 0;
         pinching = dragging = longFired = backPinch = false;
     }
 
@@ -63,10 +67,21 @@ public final class GestureController {
         }
         lostFrames = 0;
         lastSeenMs = nowMs;
+        seenFrames++;
         float palm = dist(lm, 0, 9);
         if (palm < 4) return o;
-        float pinchD = dist(lm, 4, 8) / palm;
-        float backD = dist(lm, 4, 12) / palm;
+        float pinchD, backD;
+        if (lm.length >= 105) {
+            // metric 3D distances (MediaPipe world landmarks): a thumb hidden
+            // behind the index in the image is NOT a pinch
+            float palmW = dist3(lm, 0, 9);
+            if (palmW < 0.03f) return o;
+            pinchD = dist3(lm, 4, 8) / palmW;
+            backD = dist3(lm, 4, 12) / palmW;
+        } else {
+            pinchD = dist(lm, 4, 8) / palm;
+            backD = dist(lm, 4, 12) / palm;
+        }
 
         // cursor anchor: index knuckle pulled slightly towards the wrist
         float ax = 0.8f * lm[10] + 0.2f * lm[0], ay = 0.8f * lm[11] + 0.2f * lm[1];
@@ -77,8 +92,11 @@ public final class GestureController {
         float cx = fx.filter(u * sw, ns), cy = fy.filter(v * sh, ns);
 
         boolean wasPinching = pinching;
-        if (!pinching && pinchD < PINCH_ON) pinching = true;
-        else if (pinching && pinchD > PINCH_OFF) pinching = false;
+        // debounce: 2 consecutive frames to start, 2 to release; nothing during
+        // the first frames after the hand appears (tracking still settling)
+        if (seenFrames < 8) { pinchVotes = 0; }
+        else if (!pinching) { pinchVotes = pinchD < PINCH_ON ? pinchVotes + 1 : 0; if (pinchVotes >= 2) { pinching = true; releaseVotes = 0; } }
+        else { releaseVotes = pinchD > PINCH_OFF ? releaseVotes + 1 : 0; if (releaseVotes >= 2) { pinching = false; pinchVotes = 0; } }
 
         float diag = (float) Math.hypot(sw, sh);
         if (pinching && !wasPinching) {
@@ -100,12 +118,12 @@ public final class GestureController {
             if (!dragging && !longFired) o.holdProgress = Math.min(1f, (nowMs - pinchStartMs) / (float) LONG_MS);
         } else if (wasPinching) {
             if (dragging) o.event = Event.DRAG_END;
-            else if (!longFired) o.event = Event.TAP;
+            else if (!longFired && nowMs - pinchStartMs <= 700) o.event = Event.TAP;
             dragging = false;
         }
 
         // back: thumb-middle pinch (only when the index is NOT pinched)
-        if (!pinching) {
+        if (backGesture && !pinching && seenFrames >= 8 && dist3or2(lm, 8, 4) > 0.6f) {
             if (!backPinch && backD < PINCH_ON) { backPinch = true; if (o.event == Event.NONE) o.event = Event.BACK; }
             else if (backPinch && backD > PINCH_OFF) backPinch = false;
         }
@@ -126,6 +144,16 @@ public final class GestureController {
             if (s > bestSize) { bestSize = s; best = h; }
         }
         return best;
+    }
+
+    private static float dist3(float[] lm, int a, int b) {
+        float dx = lm[42 + 3 * a] - lm[42 + 3 * b], dy = lm[43 + 3 * a] - lm[43 + 3 * b], dz = lm[44 + 3 * a] - lm[44 + 3 * b];
+        return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    /** thumb-index opening relative to palm (3D when available) */
+    private static float dist3or2(float[] lm, int a, int b) {
+        return lm.length >= 105 ? dist3(lm, a, b) / Math.max(1e-3f, dist3(lm, 0, 9)) : dist(lm, a, b) / Math.max(1f, dist(lm, 0, 9));
     }
 
     private static float dist(float[] lm, int a, int b) {
