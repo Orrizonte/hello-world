@@ -1,0 +1,30 @@
+name: Prototype MediaPipe Fingertip Detection
+on:
+  push:
+    branches: [build/beast-fingertips-v08-20261031]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  mediapipe:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Inspect MediaPipe distribution and model accessibility
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p /tmp/mp
+        for ver in 0.10.32 1.1.1; do
+          for artifact in tasks-vision tasks-core; do
+            for suffix in pom aar; do
+              url="https://dl.google.com/dl/android/maven2/com/google/mediapipe/$artifact/$ver/$artifact-$ver.$suffix"
+              if curl -fLsS --retry 2 --max-time 35 "$url" -o "/tmp/mp/$artifact-$ver.$suffix"; then
+                ls -lh "/tmp/mp/$artifact-$ver.$suffix"
+                if [ "$suffix" = pom ]; then grep -E '<artifactId>|<version>' "/tmp/mp/$artifact-$ver.$suffix" | head -60; fi
+                if [ "$suffix" = aar ]; then unzip -l "/tmp/mp/$artifact-$ver.$suffix" | tail -15; fi
+              else echo "NO_ARTIFACT $url"; fi
+            done
+          done
+        done
+        curl -fLsS --max-time 60 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' -o /tmp/mp/hand_landmarker.task
+        ls -lh /tmp/mp/hand_landmarker.task
