@@ -25,7 +25,7 @@ jobs:
           {
             set -euxo pipefail
             SDKM=$(command -v sdkmanager || ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)
-            yes | "$SDKM" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" > /dev/null
+            "$SDKM" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" > /dev/null
             mkdir -p deps
             git clone --quiet https://github.com/libusb/libusb deps/libusb
             git -C deps/libusb checkout --quiet d52e355daa09f17ce64819122cb067b8a2ee0d4b
