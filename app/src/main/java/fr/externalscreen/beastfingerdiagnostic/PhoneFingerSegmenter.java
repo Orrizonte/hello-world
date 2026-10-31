@@ -48,6 +48,13 @@ public final class PhoneFingerSegmenter {
             this.area=area;this.id=id;
         }
     }
+    public void reset(){
+        priorCount=0;
+        previousGlass=null;
+        background=null;
+        lastRegions=0;
+        lastMovingPixels=0;
+    }
     public int skinPixels(){return lastSkinPixels;}
     public int movingPixels(){return lastMovingPixels;}
     public int regions(){return lastRegions;}
