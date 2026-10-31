@@ -2,14 +2,7 @@ package fr.externalscreen.beastfingerdiagnostic;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Matrix;
-import android.graphics.Paint;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffXfermode;
-import android.graphics.RadialGradient;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.tasks.core.BaseOptions;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
@@ -21,7 +14,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * The only rendered content is real-camera image of the 5 fingertips when they
+ * The only rendered content is a translucent DRAWN CONTOUR of fingertips when they
  * project INTO the phone's automatically recognized screen region.
  * Two independent offline MediaPipe tasks run on the same reduced camera frame:
  * ObjectDetector -> phone position; HandLandmarker -> finger-tip positions.
@@ -164,21 +157,14 @@ public final class FingertipDetector implements AutoCloseable {
                 float px=(u-glass.left)/glass.width();
                 float py=(v-glass.top)/glass.height();
 
-                float distance=(float)Math.hypot((tip.x()-joint.x())*w,
-                                                 (tip.y()-joint.y())*h);
-                float radius=Math.max(9f,Math.min(30f,distance*.84f));
-                int r=Math.max(7,Math.round(radius));
-                int cx=Math.round(u*w),cy=Math.round(v*h);
-                if(cx-r<0||cy-r<0||cx+r>=w||cy+r>=h)continue;
-                // Extract ONLY a small fingertip image, never the whole hand.
-                // Draw a translucent XR-style capsule around the detected
-                // fingertip. No source camera pixels reach the overlay.
+                // XR-style illustrated contour: no pixel from the
+                // camera is present in this rendering.
                 Bitmap drawn=FingerOutlinePainter.landmark(
                     tip.x(),tip.y(),joint.x(),joint.y());
-                // Project pixel size relative to the current apparent size
-                // of the phone, not relative to the entire camera frame.
-                float radiusX=Math.max(.009f,Math.min(.085f,r/(w*glass.width())));
-                float radiusY=Math.max(.006f,Math.min(.11f,r/(h*glass.height())));
+                // The outline should be about fingertip-sized on the
+                // projected keyboard, never a giant elongated ghost.
+                float radiusX=.071f;
+                float radiusY=.027f;
                 patches.add(new Patch(drawn,px,py,radiusX,radiusY));
             }
         }
@@ -197,22 +183,6 @@ public final class FingertipDetector implements AutoCloseable {
             else skin.release();
         }
         return temporalFilter.apply(patches);
-    }
-
-    private static Bitmap feather(Bitmap src){
-        int w=src.getWidth(),h=src.getHeight();
-        Bitmap dst=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
-        Canvas c=new Canvas(dst);
-        Paint p=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
-        c.drawBitmap(src,0,0,p);
-        p.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
-        p.setShader(new RadialGradient(w/2f,h/2f,Math.min(w,h)/2f,
-            new int[]{0xffffffff,0xffffffff,0x00ffffff},
-            new float[]{0f,.52f,1f},Shader.TileMode.CLAMP));
-        c.drawCircle(w/2f,h/2f,Math.min(w,h)/2f,p);
-        p.setXfermode(null);
-        p.setShader(null);
-        return dst;
     }
 
     @Override public void close(){
