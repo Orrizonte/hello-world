@@ -52,7 +52,7 @@ public final class MainActivity extends Activity {
     private boolean initialized;
     private int alpha, scale, target;
     private boolean mirror;
-    private static final String PREFS = "settings.v085";
+    private static final String PREFS = "settings.v086";
 
     private final BroadcastReceiver events = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
@@ -119,15 +119,15 @@ public final class MainActivity extends Activity {
         setContentView(scroller);
 
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.8.5");
+        title.setText("BEAST FINGERCAM  v0.8.6");
         title.setTextSize(23);
         title.setTextColor(0xffffffff);
         page.addView(title);
 
         TextView introduction = new TextView(this);
-        introduction.setText("UNIQUEMENT les doigts au-dessus de l'écran physique " +
-            "du téléphone. La détection directe de peau en mouvement fonctionne " +
-            "même si la paume est hors champ. Aucun calibrage.");
+        introduction.setText("CONTOURS DESSINÉS DES DOIGTS UNIQUEMENT. " +
+            "Sans vidéo des mains, sans peau affichée, sans calibrage. " +
+            "Suivi du téléphone et des doigts en temps réel, avec stabilisation.");
         introduction.setTextSize(14);
         introduction.setTextColor(0xffb8d4ee);
         page.addView(introduction);
@@ -175,9 +175,9 @@ public final class MainActivity extends Activity {
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
 
-        alphaSlider = addSlider(page, "OPACITÉ", 10, 75, alpha,
+        alphaSlider = addSlider(page, "VISIBILITÉ DU CONTOUR", 20, 95, alpha,
             value -> { alpha = value; onSettingChanged(); });
-        scaleSlider = addSlider(page, "TAILLE DES BOUTS DE DOIGTS", 40, 180, scale,
+        scaleSlider = addSlider(page, "TAILLE DES CONTOURS", 50, 180, scale,
             value -> { scale = value; onSettingChanged(); });
         mirrorCheck = new CheckBox(this);
         mirrorCheck.setText("Inverser horizontalement les bouts des doigts");
@@ -196,17 +196,16 @@ public final class MainActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("MODE D'EMPLOI\n" +
-            "1. Branche les Beast, puis DÉMARRER.\n" +
-            "2. Ouvre le clavier Android natif et tape normalement.\n" +
-            "3. Les doigts apparaissent uniquement lorsque le téléphone et " +
-            "leur silhouette sont visibles dans le champ de la caméra.\n" +
-            "4. Détection en temps réel, sans calibrage ni main entière à montrer.\n" +
-            "5. En cas d'écran vide, le bouton photo de DIAGNOSTIC montre " +
-            "ponctuellement ce que filme la caméra.\n\n" +
-            "Lecture du diagnostic : téléphone=OUI signifie écran localisé ; " +
-            "doigt peau>0 et peau mobile>0 indiquent des pixels candidats ; " +
-            "zones doigts>0 signifie que des fragments ont été isolés. " +
-            "Une caméra RGB ne peut pas mesurer la distance exacte à la vitre.");
+            "1. Branche les Beast et appuie sur DÉMARRER.\n" +
+            "2. Tape normalement sur le clavier du téléphone.\n" +
+            "3. De petits contours clairs sont dessinés uniquement pour les " +
+            "doigts détectés au-dessus de l'écran du téléphone.\n" +
+            "4. Les contours sont stabilisés automatiquement ; pas de X/Y " +
+            "à régler et aucun calibrage manuel.\n" +
+            "5. Le bouton Photo de diagnostic sert uniquement à voir le champ " +
+            "réel de la caméra, il n'affiche jamais cette image sur le clavier.\n\n" +
+            "Limitations : contours approximatifs en 2D. La caméra RGB seule " +
+            "ne donne pas la distance exacte du doigt à la vitre.");
         help.setTextColor(0xffb8cde1);
         help.setTextSize(13);
         page.addView(help);
@@ -382,8 +381,8 @@ public final class MainActivity extends Activity {
 
     private void readSettings() {
         android.content.SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
-        alpha = p.getInt("alpha", 65);
-        scale = p.getInt("scale", 110);
+        alpha = p.getInt("alpha", 85);
+        scale = p.getInt("scale", 120);
         target = p.getInt("target", 0);
         mirror = p.getBoolean("mirror", false);
     }
@@ -405,7 +404,7 @@ public final class MainActivity extends Activity {
     }
     private void showSettings() {
         if (settingsSummary == null) return;
-        settingsSummary.setText("Opacité : " + alpha + "%  |  Taille : " + scale +
+        settingsSummary.setText("Contours : " + alpha + "%  |  Taille : " + scale +
             "%  |  Suivi automatique du téléphone  |  Écran : " + (target == 0 ? "téléphone" : "Beast"));
     }
     private Intent buildServiceIntent(String action) {
