@@ -51,8 +51,10 @@ public final class OverlayCameraService extends Service {
     private String detectorError;
     private int lastTipCount = -1;
     private int noTipFrames = 0;
+    private android.graphics.Rect stableWindow;
+    private int projectedWidth=1080,projectedHeight=2420;
     private int currentDisplayId = -1;
-    private int alpha = 65;
+    private int alpha = 85;
     private int scale = 110;
     private int offsetX = 0;
     private int offsetY = 0;
@@ -130,12 +132,43 @@ public final class OverlayCameraService extends Service {
                             android.graphics.Rect bounds=tipsView.bounds(patches);
                             if (bounds!=null) {
                                 try {
-                                    overlayParams.x=bounds.left;
-                                    overlayParams.y=bounds.top;
-                                    overlayParams.width=bounds.width();
-                                    overlayParams.height=bounds.height();
-                                    tipsView.setWindowOrigin(bounds.left,bounds.top);
-                                    windowManager.updateViewLayout(tipsView,overlayParams);
+                                    // Avoid relocating/recreating the Android
+                                    // overlay window every frame: it previously
+                                    // produced fast-moving "ghost" images.
+                                    boolean relayout=stableWindow==null ||
+                                        bounds.left<stableWindow.left+12 ||
+                                        bounds.top<stableWindow.top+12 ||
+                                        bounds.right>stableWindow.right-12 ||
+                                        bounds.bottom>stableWindow.bottom-12;
+                                    if(relayout){
+                                        int padding=84;
+                                        android.graphics.Rect wanted=
+                                            new android.graphics.Rect(
+                                                Math.max(0,bounds.left-padding),
+                                                Math.max(0,bounds.top-padding),
+                                                Math.min(projectedWidth,bounds.right+padding),
+                                                Math.min(projectedHeight,bounds.bottom+padding));
+                                        if(stableWindow==null ||
+                                            wanted.width()*wanted.height() <
+                                            stableWindow.width()*stableWindow.height()*1.9f){
+                                            stableWindow=wanted;
+                                        }else{
+                                            // Moving fingers can use a slightly
+                                            // expanded rectangle for fewer
+                                            // WindowManager relayouts.
+                                            stableWindow.union(wanted);
+                                            stableWindow.left=Math.max(0,stableWindow.left);
+                                            stableWindow.top=Math.max(0,stableWindow.top);
+                                            stableWindow.right=Math.min(projectedWidth,stableWindow.right);
+                                            stableWindow.bottom=Math.min(projectedHeight,stableWindow.bottom);
+                                        }
+                                        overlayParams.x=stableWindow.left;
+                                        overlayParams.y=stableWindow.top;
+                                        overlayParams.width=stableWindow.width();
+                                        overlayParams.height=stableWindow.height();
+                                        tipsView.setWindowOrigin(stableWindow.left,stableWindow.top);
+                                        windowManager.updateViewLayout(tipsView,overlayParams);
+                                    }
                                     tipsView.showTips(patches);
                                 } catch (RuntimeException windowError) {
                                     status("Fenêtre doigts : "+windowError);
@@ -151,7 +184,7 @@ public final class OverlayCameraService extends Service {
                     } else {
                         if (tipsView != null) {
                             tipsView.clear();
-                            if (++noTipFrames>=12) hideOverlay();
+                            if (++noTipFrames>=30) hideOverlay();
                         }
                     }
                     if (tips != lastTipCount) {
@@ -257,7 +290,7 @@ public final class OverlayCameraService extends Service {
     }
 
     private void updateValues(Intent intent) {
-        alpha = clamp(intent.getIntExtra(EXTRA_ALPHA, alpha), 10, 75);
+        alpha = clamp(intent.getIntExtra(EXTRA_ALPHA, alpha), 10, 95);
         scale = clamp(intent.getIntExtra(EXTRA_SCALE, scale), 40, 180);
         // Automatic phone-relative position only; never use legacy X/Y offsets.
         offsetX = 0;
@@ -333,6 +366,9 @@ public final class OverlayCameraService extends Service {
         if(projected.x<=100 || projected.y<=100)
             throw new IllegalStateException("Dimensions d'écran invalides");
         currentDisplayId=display.getDisplayId();
+        projectedWidth=projected.x;
+        projectedHeight=projected.y;
+        stableWindow=null;
         tipsView.setVirtualGeometry(projected.x,projected.y);
         tipsView.setSettings(alpha,scale,offsetX,offsetY,flip);
         if(display.getDisplayId()!=Display.DEFAULT_DISPLAY){
@@ -362,8 +398,8 @@ public final class OverlayCameraService extends Service {
             android.graphics.PixelFormat.TRANSLUCENT);
         overlayParams.gravity=Gravity.TOP|Gravity.LEFT;
         overlayParams.x=0;overlayParams.y=0;
-        overlayParams.alpha=0.72f;
-        overlayParams.setTitle("Beast FingerCam fingertip patch — small window");
+        overlayParams.alpha=1.0f; // pixels are individually translucent outlines
+        overlayParams.setTitle("Beast FingerCam — XR fingertip outlines only");
         windowManager.addView(tipsView,overlayParams);
         status("Surcouche DOIGTS UNIQUEMENT sur #"+display.getDisplayId()+
             " : résolution "+projected.x+"×"+projected.y+
@@ -392,6 +428,7 @@ public final class OverlayCameraService extends Service {
         tipsView=null;
         windowManager=null;
         overlayParams=null;
+        stableWindow=null;
         currentDisplayId=-1;
     }
 
