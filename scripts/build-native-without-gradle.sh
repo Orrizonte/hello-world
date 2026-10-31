@@ -36,7 +36,7 @@ echo "=== package manifest using aapt2 ==="
     -I "$ANDROID_JAR" \
     --manifest "$OUT/AndroidManifest.xml" \
     --min-sdk-version 26 --target-sdk-version 35 \
-    --version-code 10 --version-name 0.8.2 \
+    --version-code 11 --version-name 0.8.3 \
     -o "$OUT/apk/app-debug.apk"
 python3 - "$OUT" <<'PY'
 import sys, pathlib,zipfile
@@ -49,6 +49,8 @@ with zipfile.ZipFile(root/'apk/app-debug.apk','a') as apk:
               'lib/arm64-v8a/libmediapipe_tasks_vision_jni.so', compress_type=zipfile.ZIP_DEFLATED)
     apk.write(root/'mediapipe/asset/hand_landmarker.task',
               'assets/hand_landmarker.task', compress_type=zipfile.ZIP_STORED)
+    apk.write(root/'mediapipe/asset/efficientdet_lite0_int8.tflite',
+              'assets/efficientdet_lite0_int8.tflite', compress_type=zipfile.ZIP_STORED)
     apk.write(root/'mediapipe/asset/MEDIAPIPE-LICENSE-NOTICE.txt',
               'assets/MEDIAPIPE-LICENSE-NOTICE.txt', compress_type=zipfile.ZIP_DEFLATED)
 print('Unsigned app APK ready', (root/'apk/app-debug.apk').stat().st_size)
