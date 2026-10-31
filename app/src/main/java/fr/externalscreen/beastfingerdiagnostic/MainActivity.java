@@ -2,231 +2,289 @@ package fr.externalscreen.beastfingerdiagnostic;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.*;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.graphics.SurfaceTexture;
-import android.hardware.camera2.*;
-import android.hardware.camera2.params.StreamConfigurationMap;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.hardware.display.DisplayManager;
 import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
-import android.os.*;
-import android.util.Size;
-import android.view.*;
-import android.widget.*;
-import java.util.*;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Display;
+import android.widget.Button;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class MainActivity extends Activity {
-    private final Handler ui = new Handler(Looper.getMainLooper());
-    private UsbManager usb;
-    private CameraManager cameras;
-    private CameraDevice camera;
-    private CameraCaptureSession session;
-    private Surface surface;
-    private String chosenId;
-    private TextureView preview;
-    private TextView logView;
+    private static final int VID = 0x0C45;
+    private static final int PID = 0x6368;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService usbWorker = Executors.newSingleThreadExecutor();
+    private final ExecutorService decoder = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean decoding = new AtomicBoolean(false);
     private final StringBuilder history = new StringBuilder();
-    private boolean opening;
+    private final String permissionAction = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
+    private UsbManager usb;
+    private UsbDeviceConnection connection;
+    private ImageView preview;
+    private TextView diagnostics;
+    private Button startButton;
+    private volatile boolean startingOrRunning;
+    private volatile boolean stopped = true;
+    private int frames;
+    private boolean registered;
 
-    private final CameraDevice.StateCallback state = new CameraDevice.StateCallback() {
-        @Override public void onOpened(CameraDevice c) {
-            camera = c; opening = false;
-            report("Camera2 : caméra ouverte " + c.getId());
-            beginPreview(c);
+    private static boolean isBeastCamera(UsbDevice d) {
+        return d != null && d.getVendorId() == VID && d.getProductId() == PID;
+    }
+    private UsbDevice findCamera() {
+        for (UsbDevice d : usb.getDeviceList().values()) {
+            if (isBeastCamera(d)) return d;
         }
-        @Override public void onDisconnected(CameraDevice c) {
-            report("Caméra déconnectée.");
-            c.close(); camera = null; opening = false;
-        }
-        @Override public void onError(CameraDevice c, int code) {
-            report("Camera2 : erreur d'ouverture " + code);
-            c.close(); camera = null; opening = false;
+        return null;
+    }
+
+    private final NativeCameraBridge.FrameListener frameListener = jpeg -> {
+        if (stopped) return;
+        final int count = ++frames;
+        if (!decoding.compareAndSet(false, true)) return;
+        decoder.execute(() -> {
+            try {
+                Bitmap img = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+                if (img == null) {
+                    if (count <= 3) report("Erreur : image MJPEG non décodable (" + jpeg.length + " octets).");
+                    return;
+                }
+                final int width = img.getWidth();
+                final int height = img.getHeight();
+                main.post(() -> {
+                    if (isFinishing() || isDestroyed() || stopped) {
+                        img.recycle(); return;
+                    }
+                    preview.setImageBitmap(img);
+                    if (count <= 3 || count % 90 == 0)
+                        report("Flux vidéo : image " + count + " / " + width + "×" + height);
+                });
+            } catch (Exception e) {
+                report("Erreur décodage : " + e);
+            } finally {
+                decoding.set(false);
+            }
+        });
+    };
+
+    private final BroadcastReceiver receiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context c, Intent intent) {
+            String action = intent.getAction();
+            if (permissionAction.equals(action)) {
+                UsbDevice dev = Build.VERSION.SDK_INT >= 33
+                    ? intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class)
+                    : intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                if (isBeastCamera(dev) && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                    report("Autorisation USB accordée.");
+                    openCamera(dev);
+                } else {
+                    startingOrRunning = false;
+                    startButton.setEnabled(true);
+                    report("Autorisation USB refusée.");
+                }
+            } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
+                UsbDevice dev = Build.VERSION.SDK_INT >= 33
+                    ? intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class)
+                    : intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                if (isBeastCamera(dev)) {
+                    report("Caméra Beast débranchée.");
+                    stopCamera();
+                }
+            }
         }
     };
-    private final TextureView.SurfaceTextureListener textureEvents =
-        new TextureView.SurfaceTextureListener() {
-            @Override public void onSurfaceTextureAvailable(SurfaceTexture t, int w, int h) {
-                if (camera == null && chosenId != null && !opening) openSelected();
-            }
-            @Override public void onSurfaceTextureSizeChanged(SurfaceTexture t, int w, int h) { }
-            @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture t) {
-                stopCamera(); return true;
-            }
-            @Override public void onSurfaceTextureUpdated(SurfaceTexture t) { }
-        };
-    @Override public void onCreate(Bundle b) {
-        super.onCreate(b);
-        usb = (UsbManager) getSystemService(USB_SERVICE);
-        cameras = (CameraManager) getSystemService(CAMERA_SERVICE);
+
+    @Override public void onCreate(Bundle saved) {
+        super.onCreate(saved);
+        usb = (UsbManager)getSystemService(USB_SERVICE);
         LinearLayout root = new LinearLayout(this);
+        root.setBackgroundColor(0xff0d1523);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xff101724);
-        root.setPadding(dp(14), dp(16), dp(14), dp(10));
+        root.setPadding(dp(12), dp(16), dp(12), dp(10));
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM — TEST CAMÉRA 0.4");
-        title.setTextColor(-1);
+        title.setText("VITURE BEAST • CAMERA USB 0.5");
         title.setTextSize(19);
+        title.setTextColor(-1);
         root.addView(title);
-        TextView info = new TextView(this);
-        info.setText("Diagnostic Android Camera2. Tes doigts et le clavier ne sont pas encore superposés. L'application n'utilise pas la bibliothèque propriétaire Viture.");
-        info.setTextColor(0xffa8d4f5);
-        root.addView(info);
-        LinearLayout buttons = new LinearLayout(this);
-        root.addView(buttons);
+        TextView detail = new TextView(this);
+        detail.setText("Affichage brut de la caméra 1920×1080 MJPEG. Test préalable à l'affichage transparent des doigts.");
+        detail.setTextColor(0xffb5d5ed);
+        root.addView(detail);
+        LinearLayout row = new LinearLayout(this);
+        root.addView(row);
         Button scan = new Button(this);
         scan.setText("DÉTECTER");
-        buttons.addView(scan, new LinearLayout.LayoutParams(0, dp(54), 1));
+        row.addView(scan, new LinearLayout.LayoutParams(0, dp(55), 1f));
         scan.setOnClickListener(v -> scan());
-        Button start = new Button(this);
-        start.setText("DÉMARRER");
-        buttons.addView(start, new LinearLayout.LayoutParams(0, dp(54), 1));
-        start.setOnClickListener(v -> startCamera());
+        startButton = new Button(this);
+        startButton.setText("DÉMARRER");
+        row.addView(startButton, new LinearLayout.LayoutParams(0, dp(55), 1f));
+        startButton.setOnClickListener(v -> requestStart());
         Button stop = new Button(this);
         stop.setText("ARRÊTER");
-        buttons.addView(stop, new LinearLayout.LayoutParams(0, dp(54), 1));
+        row.addView(stop, new LinearLayout.LayoutParams(0, dp(55), 1f));
         stop.setOnClickListener(v -> stopCamera());
-        preview = new TextureView(this);
-        preview.setSurfaceTextureListener(textureEvents);
-        root.addView(preview, new LinearLayout.LayoutParams(-1, 0, 6));
+        preview = new ImageView(this);
+        preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        preview.setBackgroundColor(0xff05080f);
+        root.addView(preview, new LinearLayout.LayoutParams(-1, 0, 6f));
         ScrollView scroll = new ScrollView(this);
-        logView = new TextView(this);
-        logView.setTextSize(12);
-        logView.setTextColor(0xff81f6af);
-        scroll.addView(logView);
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 4));
+        diagnostics = new TextView(this);
+        diagnostics.setTextColor(0xff9af7ad);
+        diagnostics.setTextSize(12);
+        scroll.addView(diagnostics);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 4f));
         Button copy = new Button(this);
         copy.setText("COPIER LE DIAGNOSTIC");
         root.addView(copy);
         copy.setOnClickListener(v -> {
-            ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
-              .setPrimaryClip(ClipData.newPlainText("Beast FingerCam diagnostic", history.toString()));
-            report("Diagnostic copié.");
+            ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
+                .setPrimaryClip(ClipData.newPlainText("Beast FingerCam USB log", history.toString()));
+            report("Diagnostic copié dans le presse-papiers.");
         });
         setContentView(root);
+        IntentFilter filter = new IntentFilter(permissionAction);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+        if (Build.VERSION.SDK_INT >= 33)
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+        else registerReceiver(receiver, filter);
+        registered = true;
         report("Android " + Build.VERSION.RELEASE + " / " + Build.MODEL);
-        report("Application sans service réseau ni enregistrement vidéo.");
+        report("SDK Viture : " + (NativeCameraBridge.available() ? "bibliothèque chargée" : NativeCameraBridge.loadError()));
+        report("Aucune capture conservée ni envoyée sur Internet.");
         scan();
     }
-    private int dp(int x) { return (int)(x * getResources().getDisplayMetrics().density + 0.5f); }
-    private void report(String text) {
-        ui.post(() -> {
-            history.append(text).append('\n');
-            if (history.length() > 14000) history.delete(0, 4000);
-            if (logView != null) logView.setText(history.toString());
+
+    private int dp(int v) {
+        return (int)(v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+    private void report(String line) {
+        main.post(() -> {
+            history.append(line).append('\n');
+            if (history.length() > 15000) history.delete(0, 5000);
+            if (diagnostics != null) diagnostics.setText(history.toString());
         });
     }
-    private String detectExternal() {
-        String firstExternal = null;
-        try {
-            for (String id : cameras.getCameraIdList()) {
-                CameraCharacteristics c = cameras.getCameraCharacteristics(id);
-                Integer facing = c.get(CameraCharacteristics.LENS_FACING);
-                boolean external = facing != null &&
-                    facing == CameraCharacteristics.LENS_FACING_EXTERNAL;
-                report("Camera2 ID " + id + " / direction " + facing +
-                    (external ? " / EXTERNE" : ""));
-                if (external && firstExternal == null) firstExternal = id;
-            }
-        } catch (Exception e) {
-            report("Erreur de liste Camera2 : " + e.toString());
-        }
-        return firstExternal;
-    }
     private void scan() {
-        report("— Périphériques USB —");
-        boolean found = false;
-        for (UsbDevice d : usb.getDeviceList().values()) {
-            String line = String.format(java.util.Locale.US, "USB %04X:%04X / %s",
-                d.getVendorId(), d.getProductId(), d.getDeviceName());
-            report(line);
-            if (d.getVendorId() == 0x0C45 && d.getProductId() == 0x6368) found = true;
+        report("— PÉRIPHÉRIQUES USB —");
+        for (UsbDevice dev : usb.getDeviceList().values()) {
+            report(String.format(Locale.US, "USB %04X:%04X / autorisation=%s",
+                dev.getVendorId(), dev.getProductId(), usb.hasPermission(dev)));
         }
-        report(found ? "Camera Beast 0C45:6368 trouvée." :
-            "Camera Beast non visible en USB (il peut s'agir des autorisations).");
-        chosenId = detectExternal();
-        report(chosenId != null ? "Caméra externe Camera2 disponible : " + chosenId :
-            "Aucune caméra externe Camera2. Il faudra le SDK USB Viture pour la vidéo.");
+        report(findCamera() == null ? "Caméra Beast non détectée." : "Caméra Beast 0C45:6368 détectée !");
+        DisplayManager dm = (DisplayManager)getSystemService(DISPLAY_SERVICE);
+        for (Display disp : dm.getDisplays())
+            report("Écran #" + disp.getDisplayId() + " : " + disp.getName());
     }
-    private void startCamera() {
-        if (camera != null || opening) return;
+    private void requestStart() {
+        if (startingOrRunning) { report("Démarrage déjà en cours."); return; }
+        if (!NativeCameraBridge.available()) {
+            report("Impossible : SDK Viture introuvable dans l'APK."); return;
+        }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, 61);
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, 30);
             return;
         }
-        chosenId = detectExternal();
-        if (chosenId == null) {
-            report("Impossible de démarrer : aucune caméra EXTERNE publiée par Android.");
-            return;
-        }
-        openSelected();
-    }
-    private void openSelected() {
-        if (chosenId == null || !preview.isAvailable() || camera != null || opening) return;
-        try {
-            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                report("Autorisation caméra manquante."); return;
-            }
-            opening = true;
-            cameras.openCamera(chosenId, state, ui);
-            report("Demande d'ouverture Camera2 : " + chosenId);
-        } catch (Exception e) {
-            opening = false;
-            report("Impossible d'ouvrir : " + e.toString());
+        UsbDevice dev = findCamera();
+        if (dev == null) { report("Caméra non détectée."); scan(); return; }
+        startingOrRunning = true;
+        startButton.setEnabled(false);
+        if (!usb.hasPermission(dev)) {
+            Intent i = new Intent(permissionAction).setPackage(getPackageName());
+            PendingIntent pending = PendingIntent.getBroadcast(this, 0, i,
+                PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            usb.requestPermission(dev, pending);
+            report("Accepte l'autorisation USB pour la caméra.");
+        } else {
+            openCamera(dev);
         }
     }
-    private void beginPreview(CameraDevice c) {
-        try {
-            CameraCharacteristics cc = cameras.getCameraCharacteristics(c.getId());
-            StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-            Size best = new Size(640, 480);
-            if (map != null) {
-                Size[] sizes = map.getOutputSizes(SurfaceTexture.class);
-                if (sizes != null && sizes.length > 0) {
-                    best = sizes[0];
-                    long score = Long.MAX_VALUE;
-                    for (Size size : sizes) {
-                        long delta = Math.abs(size.getWidth()-1280L) +
-                            Math.abs(size.getHeight()-720L);
-                        if (delta < score) { best = size; score = delta; }
+    private void openCamera(UsbDevice dev) {
+        if (connection != null) { report("Connexion déjà ouverte."); return; }
+        connection = usb.openDevice(dev);
+        if (connection == null) {
+            report("Échec : impossible d'ouvrir le périphérique USB.");
+            startingOrRunning = false; startButton.setEnabled(true); return;
+        }
+        int descriptor = connection.getFileDescriptor();
+        report("USB ouvert (fd=" + descriptor + "). Initialisation caméra…");
+        stopped = false;
+        frames = 0;
+        usbWorker.execute(() -> {
+            int code = NativeCameraBridge.start(descriptor, frameListener);
+            main.post(() -> {
+                if (code == 0) {
+                    report("Caméra démarrée ! Place tes doigts sur ton clavier.");
+                } else {
+                    report("Erreur caméra Viture : " + code);
+                    stopped = true;
+                    startingOrRunning = false;
+                    if (connection != null) {
+                        connection.close(); connection = null;
                     }
+                    startButton.setEnabled(true);
                 }
-            }
-            SurfaceTexture texture = preview.getSurfaceTexture();
-            if (texture == null) { report("Texture non disponible."); return; }
-            texture.setDefaultBufferSize(best.getWidth(), best.getHeight());
-            surface = new Surface(texture);
-            CaptureRequest.Builder request = c.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            request.addTarget(surface);
-            Size chosenSize = best;
-            c.createCaptureSession(Collections.singletonList(surface),
-                new CameraCaptureSession.StateCallback() {
-                    @Override public void onConfigured(CameraCaptureSession s) {
-                        session = s;
-                        try {
-                            s.setRepeatingRequest(request.build(), null, ui);
-                            report("VIDÉO ACTIVE : " + chosenSize.getWidth() + "x" + chosenSize.getHeight());
-                            report("Place tes doigts sur le clavier du téléphone et regarde l'aperçu.");
-                        } catch (Exception e) { report("Aperçu : " + e.toString()); }
-                    }
-                    @Override public void onConfigureFailed(CameraCaptureSession s) {
-                        report("Camera2 : configuration du flux refusée.");
-                    }
-                }, ui);
-        } catch (Exception e) { report("Création vidéo : " + e.toString()); }
+            });
+        });
     }
     private void stopCamera() {
-        if (session != null) { session.close(); session = null; }
-        if (surface != null) { surface.release(); surface = null; }
-        if (camera != null) { camera.close(); camera = null; }
-        opening = false;
-        report("Caméra arrêtée.");
+        stopped = true;
+        startButton.setEnabled(false);
+        usbWorker.execute(() -> {
+            NativeCameraBridge.stop();
+            main.post(() -> {
+                if (connection != null) {
+                    connection.close();
+                    connection = null;
+                }
+                startingOrRunning = false;
+                if (!isDestroyed()) startButton.setEnabled(true);
+                report("Caméra arrêtée.");
+            });
+        });
     }
-    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] grants) {
-        super.onRequestPermissionsResult(code, permissions, grants);
-        if (code == 61) {
-            if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) startCamera();
-            else report("Autorisation caméra refusée.");
+    @Override public void onRequestPermissionsResult(int code, String[] names, int[] grants) {
+        super.onRequestPermissionsResult(code, names, grants);
+        if (code == 30) {
+            if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED)
+                requestStart();
+            else report("Autorisation Android CAMERA refusée.");
         }
     }
-    @Override protected void onDestroy() { stopCamera(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        if (registered) unregisterReceiver(receiver);
+        stopped = true;
+        usbWorker.execute(() -> {
+            NativeCameraBridge.stop();
+            if (connection != null) {
+                connection.close();
+                connection = null;
+            }
+        });
+        usbWorker.shutdown();
+        decoder.shutdown();
+        super.onDestroy();
+    }
 }
