@@ -38,7 +38,7 @@ public final class FingertipOverlayView extends View {
 
     public void setSettings(int percent,int scale,int dx,int dy,boolean mirrored){
         opacity=Math.max(10,Math.min(75,percent));
-        patchScale=Math.max(40,Math.min(140,scale));
+        patchScale=Math.max(40,Math.min(180,scale));
         shiftX=dx; shiftY=dy;
         mirror=mirrored;
         invalidate();
@@ -79,8 +79,8 @@ public final class FingertipOverlayView extends View {
             if(p.image.isRecycled())continue;
             float x=projected.left+(mirror?1f-p.x:p.x)*projected.width()+shiftX*density;
             float y=projected.top+p.y*projected.height()-shiftY*density;
-            float rx=p.rx*projected.width()*patchScale/100f;
-            float ry=p.ry*projected.height()*patchScale/100f;
+            float rx=Math.max(12f,p.rx*projected.width()*patchScale/100f);
+            float ry=Math.max(10f,p.ry*projected.height()*patchScale/100f);
             canvas.drawBitmap(p.image,null,new RectF(x-rx,y-ry,x+rx,y+ry),brush);
         }
     }
