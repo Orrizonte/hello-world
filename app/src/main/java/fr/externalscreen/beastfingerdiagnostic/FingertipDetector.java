@@ -78,7 +78,8 @@ public final class FingertipDetector implements AutoCloseable {
             phoneTracker=new AutoPhoneTracker(this.context);
         } catch(Throwable error){
             hands.close();
-            throw error;
+            if(error instanceof RuntimeException)throw (RuntimeException)error;
+            throw new IllegalStateException("Initialisation du modèle téléphone",error);
         }
         handLandmarker=hands;
     }
