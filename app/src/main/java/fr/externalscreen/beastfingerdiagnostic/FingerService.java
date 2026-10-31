@@ -85,7 +85,10 @@ public final class FingerService extends Service {
 
     // settings
     private int strokeAlpha, strokeDp, frameDp;
-    private boolean fillOn, frameOn, predictOn, rotate180, mirror;
+    private boolean fillOn, frameOn, predictOn, rotate180, mirror, gestureMode;
+    private final GestureController gestures = new GestureController();
+    private long lastGestureLm;
+    private String gestureDiag = "mode gestes";
 
     private final NativeCameraBridge.FrameListener cameraListener = new NativeCameraBridge.FrameListener() {
         @Override public void onJpegFrame(byte[] jpeg) {
@@ -210,14 +213,22 @@ public final class FingerService extends Service {
         predictOn = p.getBoolean("predict", true);
         rotate180 = p.getBoolean("rotate180", false);
         mirror = p.getBoolean("mirror", false);
+        gestureMode = "gestures".equals(p.getString("mode", "outlines"));
+        float sens = p.getInt("sensitivity", 100) / 100f; // bigger = smaller hand box
+        float half = 0.32f / sens;
+        gestures.boxLeft = 0.5f - half; gestures.boxRight = 0.5f + half;
+        gestures.boxTop = 0.48f - half; gestures.boxBottom = 0.48f + half;
     }
 
     private void applySettings() {
         main.post(() -> {
             if (overlay == null) return;
             float d = getResources().getDisplayMetrics().density;
-            overlay.configure(strokeAlpha, strokeDp * d, fillOn, frameOn, frameDp * d, predictOn);
+            overlay.configure(strokeAlpha, strokeDp * d, fillOn, frameOn && !gestureMode, frameDp * d, predictOn);
+            if (gestureMode) overlay.show(new FingerOverlayView.Frame(new ArrayList<>(), 0, 0, 0));
+            else overlay.setCursor(null);
         });
+        gestures.reset();
         processor.setFrameMode(frameOn);
         processor.resetScreen();
     }
@@ -277,7 +288,7 @@ public final class FingerService extends Service {
             return;
         }
         float d = getResources().getDisplayMetrics().density;
-        overlay.configure(strokeAlpha, strokeDp * d, fillOn, frameOn, frameDp * d, predictOn);
+        overlay.configure(strokeAlpha, strokeDp * d, fillOn, frameOn && !gestureMode, frameDp * d, predictOn);
         overlay.setScreenSize(screenW, screenH);
         status(overlayIsA11y
             ? "Surcouche au-dessus du clavier (service d'accessibilité)."
@@ -410,9 +421,23 @@ public final class FingerService extends Service {
                 long lmTime = hands != null ? hands.latestTimeNs() : 0;
                 // landmarks older than ~0.4 s are not a useful prior any more
                 if (t - lmTime > 400_000_000L) lm = new ArrayList<>();
-                FrameProcessor.Result r = processor.process(argb, w, h, lm, lmTime, screenW, screenH, t);
+                FrameProcessor.Result r;
                 FingerOverlayView ov = overlay;
-                if (ov != null) { ov.setBlink(frameOn && r.searching); ov.show(new FingerOverlayView.Frame(r.contours, t, r.vx, r.vy)); }
+                if (gestureMode) {
+                    r = new FrameProcessor.Result();
+                    r.timeNs = t;
+                    if (lmTime != lastGestureLm) {
+                        lastGestureLm = lmTime;
+                        GestureController.Output g = gestures.update(lm, w, h, screenW, screenH, lmTime / 1_000_000L);
+                        handleGesture(g);
+                        gestureDiag = "mode gestes : " + (!g.visible ? "aucune main" : g.dragging ? "glisser" : g.pinching ? "pincement" : "main suivie")
+                            + (g.event != GestureController.Event.NONE ? " → " + g.event : "");
+                    }
+                    r.diag = gestureDiag;
+                } else {
+                    r = processor.process(argb, w, h, lm, lmTime, screenW, screenH, t);
+                    if (ov != null) { ov.setBlink(frameOn && r.searching); ov.show(new FingerOverlayView.Frame(r.contours, t, r.vx, r.vy)); }
+                }
                 lastFrameMs = SystemClock.elapsedRealtime();
                 if (previewWanted) makePreview(decoded, r);
                 if (recordRequest || rec != null) record(jpeg, decoded, t, lm, r);
@@ -431,6 +456,24 @@ public final class FingerService extends Service {
                 status("Erreur traitement : " + e);
             }
         }
+    }
+
+    private void handleGesture(GestureController.Output g) {
+        main.post(() -> {
+            FingerOverlayView ov = overlay;
+            if (ov != null) ov.setCursor(g);
+            FingerAccessibilityService a = FingerAccessibilityService.instance;
+            if (a == null) return;
+            switch (g.event) {
+                case TAP: a.tap(g.x, g.y, 40); break;
+                case LONG_PRESS: a.tap(g.x, g.y, 700); break;
+                case DRAG_START: a.dragStart(g.x, g.y); break;
+                case DRAG_MOVE: a.dragMove(g.x, g.y); break;
+                case DRAG_END: a.dragEnd(g.x, g.y); break;
+                case BACK: a.back(); break;
+                default: break;
+            }
+        });
     }
 
     private static void transform(int[] a, int w, int h, boolean rot180, boolean mirror) {

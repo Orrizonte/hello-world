@@ -37,7 +37,7 @@ import java.util.Locale;
 /** Setup checklist, start/stop, appearance settings, live camera diagnostic. */
 public final class MainActivity extends Activity {
     private static final String USB_PERMISSION = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
-    static final String VERSION = "0.9.6";
+    static final String VERSION = "0.10.0";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
     private SharedPreferences prefs;
@@ -148,7 +148,32 @@ public final class MainActivity extends Activity {
         statsView = text("", 12, 0xff9be7b4);
         page.addView(statsView);
 
-        page.addView(section("Apparence"));
+        page.addView(section("Mode"));
+        android.widget.RadioGroup modes = new android.widget.RadioGroup(this);
+        android.widget.RadioButton mOut = new android.widget.RadioButton(this);
+        mOut.setText("Contours des doigts au-dessus de l'écran du téléphone");
+        mOut.setTextColor(0xffffffff); mOut.setId(View.generateViewId());
+        android.widget.RadioButton mGes = new android.widget.RadioButton(this);
+        mGes.setText("Contrôle par gestes dans l'air (curseur + pincements)");
+        mGes.setTextColor(0xffffffff); mGes.setId(View.generateViewId());
+        modes.addView(mOut); modes.addView(mGes);
+        modes.check("gestures".equals(prefs.getString("mode", "outlines")) ? mGes.getId() : mOut.getId());
+        modes.setOnCheckedChangeListener((g, id) -> {
+            prefs.edit().putString("mode", id == mGes.getId() ? "gestures" : "outlines").apply();
+            pushConfig();
+        });
+        page.addView(modes);
+        page.addView(text("GESTES — lève une main devant toi, dans le champ de la caméra :\n"
+            + "• déplacer la main : le curseur suit (repère = base de l'index)\n"
+            + "• pincer pouce + index puis relâcher : appui (clic)\n"
+            + "• pincer et garder ~0,6 s (arc jaune) : appui long (équivalent clic droit)\n"
+            + "• pincer puis bouger : glisser / faire défiler\n"
+            + "• pincer pouce + majeur : retour\n"
+            + "Le service d'accessibilité doit être actif. Après cette mise à jour, désactive-le puis réactive-le une fois "
+            + "pour qu'Android lui accorde la simulation d'appuis.", 12, 0xff8fa3b8));
+        page.addView(slider("Sensibilité du curseur (amplitude de main nécessaire)", "sensitivity", 60, 200, 100, " %"));
+
+        page.addView(section("Apparence (mode contours)"));
         page.addView(slider("Opacité du contour", "alpha", 20, 100, 92, "%"));
         page.addView(slider("Épaisseur du contour", "stroke", 1, 8, 3, " dp"));
         page.addView(check("Voile très léger à l'intérieur des doigts", "fill", true));

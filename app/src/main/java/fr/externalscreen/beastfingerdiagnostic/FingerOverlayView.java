@@ -37,6 +37,11 @@ final class FingerOverlayView extends View {
     private float frameWidth = 26f;
     private boolean predict = true;
     private volatile boolean blink;
+    private volatile GestureController.Output cursor;
+    private final Paint cursorPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    /** Gesture mode: ring cursor (filled while pinching, arc = long-press progress). */
+    void setCursor(GestureController.Output c) { cursor = c; postInvalidateOnAnimation(); }
 
     /** While the screen is being searched, the frame blinks (verified by the camera). */
     void setBlink(boolean b) { if (b != blink) { blink = b; postInvalidateOnAnimation(); } }
@@ -103,6 +108,27 @@ final class FingerOverlayView extends View {
             canvas.drawRect(3 * h, 3 * h, screenW - 3 * h, screenH - 3 * h, border);
             border.setColor(0xffffffff);
             canvas.drawRect(h, h, screenW - h, screenH - h, border);
+        }
+        GestureController.Output cur = cursor;
+        if (cur != null && cur.visible) {
+            float d = getResources().getDisplayMetrics().density;
+            float r = (14 - 5 * cur.pinch) * d;
+            cursorPaint.setStyle(Paint.Style.FILL);
+            cursorPaint.setColor(cur.pinching ? 0xcc4fc3f7 : ((int) (60 + 100 * cur.pinch) << 24) | 0xffffff);
+            canvas.drawCircle(cur.x, cur.y, r, cursorPaint);
+            cursorPaint.setStyle(Paint.Style.STROKE);
+            cursorPaint.setStrokeWidth(2.5f * d);
+            cursorPaint.setColor(0xf0ffffff);
+            canvas.drawCircle(cur.x, cur.y, r, cursorPaint);
+            cursorPaint.setColor(0xc0000000);
+            cursorPaint.setStrokeWidth(1f * d);
+            canvas.drawCircle(cur.x, cur.y, r + 2f * d, cursorPaint);
+            if (cur.holdProgress > 0.15f && cur.pinching) {
+                cursorPaint.setColor(0xffffc107);
+                cursorPaint.setStrokeWidth(3f * d);
+                float rr = r + 6 * d;
+                canvas.drawArc(cur.x - rr, cur.y - rr, cur.x + rr, cur.y + rr, -90, 360 * cur.holdProgress, false, cursorPaint);
+            }
         }
         Frame f = frame;
         boolean animate = false;
