@@ -31,6 +31,9 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
+// Read by the patched libuvc stream.c (isochronous packets per URB).
+extern "C" { int uvc_ppt_max = 8; }
+
 namespace {
 
 // ---------------------------------------------------------------- JNI glue
@@ -187,7 +190,7 @@ Choice chooseMode(uvc_device_handle_t* dev, int wantW, int wantH) {
             std::snprintf(line, sizeof line, "%s %dx%d@%d; ",
                           fmt == UVC_FRAME_FORMAT_MJPEG ? "MJPEG" : fmt == UVC_FRAME_FORMAT_YUYV ? "YUYV" : "autre",
                           fr->wWidth, fr->wHeight, fps);
-            gDescription += line;
+            if (fmt == UVC_FRAME_FORMAT_MJPEG) gDescription += line;
             if (fmt == UVC_FRAME_FORMAT_UNKNOWN) continue;
             double cost = std::abs(fr->wWidth - wantW) + std::abs(fr->wHeight - wantH);
             if (fps < 25) cost += 5000;
@@ -232,21 +235,46 @@ int startUvc(int fd, int wantW, int wantH) {
     }
     Choice c = chooseMode(gDev, wantW, wantH);
     if (c.fmt == UVC_FRAME_FORMAT_UNKNOWN) { gDescription += "aucun format MJPEG/YUYV; "; closeUvc(); return -205; }
-    uvc_stream_ctrl_t ctrl;
-    r = uvc_get_stream_ctrl_format_size(gDev, &ctrl, c.fmt, c.w, c.h, c.fps);
-    if (r != UVC_SUCCESS) {
-        gDescription += std::string("négociation: ") + uvc_strerror(static_cast<uvc_error_t>(r)) + "; ";
-        closeUvc(); return -206;
+    // Android usbfs often rejects large isochronous URBs (ENOMEM -> "I/O error",
+    // libuvc issues #299/#326). Retry with fewer packets per transfer, then
+    // with lighter modes.
+    struct Try { uvc_frame_format fmt; int w, h, fps; };
+    std::vector<Try> modes = {{c.fmt, c.w, c.h, c.fps},
+                              {UVC_FRAME_FORMAT_MJPEG, 1280, 720, 30},
+                              {UVC_FRAME_FORMAT_MJPEG, 640, 480, 30},
+                              {UVC_FRAME_FORMAT_MJPEG, 1920, 1080, 30}};
+    const int ppts[] = {8, 4, 2, 1, 16};
+    bool started = false;
+    char line[128];
+    for (size_t m = 0; m < modes.size() && !started; ++m) {
+        const Try& t = modes[m];
+        if (m > 0 && t.fmt == c.fmt && t.w == c.w && t.h == c.h) continue;
+        uvc_stream_ctrl_t ctrl;
+        r = uvc_get_stream_ctrl_format_size(gDev, &ctrl, t.fmt, t.w, t.h, t.fps);
+        if (r != UVC_SUCCESS) {
+            std::snprintf(line, sizeof line, "[%dx%d négociation: %s] ", t.w, t.h, uvc_strerror(static_cast<uvc_error_t>(r)));
+            gDescription += line;
+            continue;
+        }
+        for (int ppt : ppts) {
+            uvc_ppt_max = ppt;
+            gRunning = true;
+            r = uvc_start_streaming(gDev, &ctrl, uvcCallback, nullptr, 0);
+            if (r == UVC_SUCCESS) {
+                started = true;
+                c.fmt = t.fmt; c.w = t.w; c.h = t.h; c.fps = t.fps;
+                std::snprintf(line, sizeof line, "[paquets/transfert=%d, charge=%u o] ", ppt,
+                              static_cast<unsigned>(ctrl.dwMaxPayloadTransferSize));
+                gDescription += line;
+                break;
+            }
+            gRunning = false;
+            std::snprintf(line, sizeof line, "[%dx%d ppt=%d: %s] ", t.w, t.h, ppt, uvc_strerror(static_cast<uvc_error_t>(r)));
+            gDescription += line;
+        }
     }
-    gRunning = true;
-    r = uvc_start_streaming(gDev, &ctrl, uvcCallback, nullptr, 0);
-    if (r != UVC_SUCCESS) {
-        gRunning = false;
-        gDescription += std::string("streaming: ") + uvc_strerror(static_cast<uvc_error_t>(r)) + "; ";
-        closeUvc(); return -207;
-    }
+    if (!started) { closeUvc(); return -207; }
     gStreaming = true;
-    char line[96];
     std::snprintf(line, sizeof line, "=> UVC %s %dx%d@%d",
                   c.fmt == UVC_FRAME_FORMAT_MJPEG ? "MJPEG" : "YUYV", c.w, c.h, c.fps);
     gDescription += line;

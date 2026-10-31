@@ -26,9 +26,16 @@ for f in core descriptor hotplug io sync strerror os/linux_usbfs os/events_posix
   $CC $CFLAGS -I"$LIBUSB/android" -I"$LIBUSB/libusb" -I"$LIBUSB/libusb/os" -c "$LIBUSB/libusb/$f.c" -o "$o"
   objs+=("$o")
 done
+# Packets per isochronous URB becomes a runtime variable (uvc_ppt_max, set by
+# the JNI bridge) so the bridge can retry smaller URBs on Android.
+mkdir -p "$WORK/src"
+{ echo "extern int uvc_ppt_max;"; sed 's/packets_per_transfer > LIBUVC_PACKETS_PER_TRANSFER_MAX/packets_per_transfer > (size_t) uvc_ppt_max/; s/packets_per_transfer = LIBUVC_PACKETS_PER_TRANSFER_MAX;/packets_per_transfer = (size_t) uvc_ppt_max;/' "$LIBUVC/src/stream.c"; } > "$WORK/src/stream.c"
+grep -q "uvc_ppt_max;" "$WORK/src/stream.c"
+test "$(grep -c '(size_t) uvc_ppt_max' "$WORK/src/stream.c")" = 2
 for f in ctrl ctrl-gen device diag frame init misc stream; do
   o="$WORK/uvc_$f.o"
-  $CC $CFLAGS -I"$WORK/gen" -I"$LIBUVC/include" -I"$LIBUSB/libusb" -c "$LIBUVC/src/$f.c" -o "$o"
+  srcf="$LIBUVC/src/$f.c"; [ "$f" = stream ] && srcf="$WORK/src/stream.c"
+  $CC $CFLAGS -DLIBUVC_NUM_TRANSFER_BUFS=24 -I"$WORK/gen" -I"$LIBUVC/include" -I"$LIBUVC/src" -I"$LIBUSB/libusb" -c "$srcf" -o "$o"
   objs+=("$o")
 done
 $CXX -std=c++17 -O2 -fPIC -shared -static-libstdc++ -Wall \
