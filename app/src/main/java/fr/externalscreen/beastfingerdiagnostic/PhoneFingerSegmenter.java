@@ -192,7 +192,7 @@ public final class PhoneFingerSegmenter {
         java.util.Arrays.fill(components,0);
         ArrayList<Region> regions=new ArrayList<>();
         int minComponent=Math.max(30,n/1500);
-        int maxComponent=(int)(n*.065f);
+        int maxComponent=(int)(n*.038f);
         int currentId=0;
         for(int y=1;y<outH-1;y++){
             for(int x=1;x<outW-1;x++){
@@ -225,7 +225,7 @@ public final class PhoneFingerSegmenter {
                 // A large contiguous coloured blob is probably a palm,
                 // reflection or UI region rather than an isolated fingertip.
                 if(area<minComponent || area>maxComponent ||
-                    bw<4 || bh<4 || bw>outW*.32f || bh>outH*.28f)continue;
+                    bw<4 || bh<4 || bw>outW*.19f || bh>outH*.16f)continue;
                 regions.add(new Region(minX,maxX,minY,maxY,area,componentId));
             }
         }
@@ -269,7 +269,8 @@ public final class PhoneFingerSegmenter {
             Bitmap drawn=FingerOutlinePainter.componentOutline(
                 components,region.id,outW,outH,minX,minY,maxX,maxY);
             if(drawn==null)continue;
-            float rx=patchW/(2f*outW),ry=patchH/(2f*outH);
+            float rx=Math.min(.082f,patchW/(2f*outW));
+            float ry=Math.min(.042f,patchH/(2f*outH));
             result.add(new FingertipDetector.Patch(
                 drawn,centerX,centerY,rx,ry));
             // Conservative limit: don't show a swarm of unrelated image
