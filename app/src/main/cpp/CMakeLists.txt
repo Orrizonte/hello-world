@@ -1,5 +1,0 @@
-cmake_minimum_required(VERSION 3.22.1)
-project(beast_finger_camera LANGUAGES CXX)
-add_library(beast_cam_bridge SHARED beast_cam_bridge.cpp)
-target_link_libraries(beast_cam_bridge PRIVATE log dl)
-target_link_options(beast_cam_bridge PRIVATE "-Wl,-z,max-page-size=16384")

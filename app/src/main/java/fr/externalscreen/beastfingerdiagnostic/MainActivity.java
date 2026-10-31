@@ -1,518 +1,334 @@
 package fr.externalscreen.beastfingerdiagnostic;
 
 import android.Manifest;
-import android.app.*;
-import android.content.*;
+import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.hardware.display.DisplayManager;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.hardware.usb.*;
+import android.hardware.display.DisplayManager;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
 import android.net.Uri;
-import android.os.*;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
-import android.view.*;
-import android.widget.*;
+import android.text.TextUtils;
+import android.view.Display;
+import android.view.View;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.TextView;
 import java.util.Locale;
 
-/**
- * Controls the camera overlay. Phone input is never simulated or intercepted.
- * To test with the native keyboard: start the overlay, go to a messaging app,
- * and type physically on the phone while looking at the Viture Beast display.
- */
+/** Setup checklist, start/stop, appearance settings, live camera diagnostic. */
 public final class MainActivity extends Activity {
-    private static final String USB_PERMISSION_ACTION =
-        "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
+    private static final String USB_PERMISSION = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
+    private static final String VERSION = "0.9.0";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
+    private SharedPreferences prefs;
     private UsbManager usb;
-    private TextView status;
-    private TextView settingsSummary;
-    private SeekBar alphaSlider, scaleSlider;
-    private Spinner screenSpinner;
-    private CheckBox mirrorCheck;
-    private boolean receiversRegistered;
-    private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) {
-            if (OverlayCameraService.ACTION_STATUS.equals(intent.getAction()))
-                report(intent.getStringExtra(OverlayCameraService.EXTRA_MESSAGE));
-        }
-    };
-    private final BroadcastReceiver calibrationReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context ctx, Intent intent) {
-            Bitmap full=CalibrationFrameHolder.peek();
-            if(full==null || full.isRecycled()){
-                report("Capture de calibration absente ; recommence.");
-                return;
-            }
-            showCameraDiagnostic(full);
-        }
-    };
-    private boolean calibrationReceiverRegistered;
-    private boolean initialized;
-    private int alpha, scale, target;
-    private boolean mirror;
-    private static final String PREFS = "settings.v086";
+    private TextView logView, statsView, checklist;
+    private ImageView previewView;
+    private CheckBox previewCheck;
+    private boolean pendingStart;
 
-    private final BroadcastReceiver events = new BroadcastReceiver() {
-        @Override public void onReceive(Context ctx, Intent intent) {
-            String action = intent.getAction();
-            if (USB_PERMISSION_ACTION.equals(action)) {
-                UsbDevice device = Build.VERSION.SDK_INT >= 33
-                    ? intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class)
-                    : intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                if (isCamera(device) &&
-                    intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    && usb.hasPermission(device)) {
-                    report("Autorisation USB accordée.");
-                    startServiceNow();
-                } else {
-                    report("Autorisation USB non accordée.");
-                }
-            } else if (OverlayCameraService.ACTION_STATUS.equals(action)) {
-                report(intent.getStringExtra(OverlayCameraService.EXTRA_MESSAGE));
-            } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
-                report("Périphérique USB connecté.");
-                scan();
+    private final BroadcastReceiver receiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context c, Intent i) {
+            String a = i.getAction();
+            if (FingerService.ACTION_STATUS.equals(a)) {
+                report(i.getStringExtra(FingerService.EXTRA_MESSAGE));
+            } else if (USB_PERMISSION.equals(a)) {
+                boolean ok = i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+                report(ok ? "Permission USB accordée." : "Permission USB refusée.");
+                if (ok && pendingStart) start();
+            } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(a)) {
+                report("Périphérique USB branché.");
+                refreshChecklist();
             }
         }
     };
 
-    @Override public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        usb = (UsbManager)getSystemService(USB_SERVICE);
-        readSettings();
+    private final Runnable ticker = new Runnable() {
+        @Override public void run() {
+            refreshChecklist();
+            boolean running = FingerService.instance != null;
+            statsView.setText(running ? FingerService.stats : "Arrêté.");
+            if (previewCheck.isChecked()) {
+                Bitmap b = FingerService.preview.get();
+                if (b != null && !b.isRecycled()) previewView.setImageBitmap(b);
+            }
+            main.postDelayed(this, previewCheck.isChecked() ? 150 : 700);
+        }
+    };
+
+    @Override protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        prefs = getSharedPreferences(FingerService.PREFS, MODE_PRIVATE);
+        usb = getSystemService(UsbManager.class);
         buildUi();
-        IntentFilter usbIntent = new IntentFilter(USB_PERMISSION_ACTION);
-        usbIntent.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
-        if (Build.VERSION.SDK_INT >= 33)
-            registerReceiver(events, usbIntent, Context.RECEIVER_EXPORTED);
-        else registerReceiver(events, usbIntent);
-        IntentFilter statusIntent = new IntentFilter(OverlayCameraService.ACTION_STATUS);
-        if (Build.VERSION.SDK_INT >= 33)
-            registerReceiver(statusReceiver, statusIntent, Context.RECEIVER_NOT_EXPORTED);
-        else registerReceiver(statusReceiver, statusIntent);
-        IntentFilter calibrationFilter =
-            new IntentFilter(OverlayCameraService.ACTION_CALIBRATION_FRAME);
-        if (Build.VERSION.SDK_INT >= 33)
-            registerReceiver(calibrationReceiver, calibrationFilter, Context.RECEIVER_NOT_EXPORTED);
-        else registerReceiver(calibrationReceiver, calibrationFilter);
-        calibrationReceiverRegistered = true;
-        receiversRegistered = true;
-        initialized = true;
-        showSettings();
-        report("Android " + Build.VERSION.RELEASE + " — " + Build.MODEL);
-        report("SDK Viture : " + (NativeCameraBridge.available() ?
-            "bibliothèque chargée" : NativeCameraBridge.loadError()));
-        report("Les touches du téléphone ne sont pas modifiées.");
-        report("Vidéo locale uniquement : aucun réseau ni enregistrement.");
-        scan();
+        IntentFilter f = new IntentFilter(FingerService.ACTION_STATUS);
+        f.addAction(USB_PERMISSION);
+        f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, f, Context.RECEIVER_EXPORTED);
+        else registerReceiver(receiver, f);
+        report("Beast Fingers " + VERSION + " — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        report("Bibliothèque native : " + (NativeCameraBridge.available() ? "OK" : NativeCameraBridge.loadError())
+            + (NativeCameraBridge.vitureSdkPresent() ? " | SDK VITURE présent (secours)" : " | UVC direct (sans SDK)"));
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2);
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        FingerService.previewWanted = previewCheck.isChecked();
+        main.post(ticker);
+    }
+
+    @Override protected void onPause() {
+        FingerService.previewWanted = false;
+        main.removeCallbacks(ticker);
+        super.onPause();
+    }
+
+    @Override protected void onDestroy() {
+        unregisterReceiver(receiver);
+        super.onDestroy();
+    }
+
+    // ------------------------------------------------------------------ UI
     private void buildUi() {
-        ScrollView scroller = new ScrollView(this);
+        ScrollView scroll = new ScrollView(this);
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setBackgroundColor(0xff101827);
-        page.setPadding(dp(16), dp(20), dp(16), dp(18));
-        scroller.addView(page);
-        setContentView(scroller);
+        page.setPadding(dp(16), dp(18), dp(16), dp(24));
+        page.setBackgroundColor(0xff0f141c);
+        scroll.addView(page);
+        setContentView(scroll);
 
-        TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.8.6");
-        title.setTextSize(23);
-        title.setTextColor(0xffffffff);
+        TextView title = text("Beast Fingers " + VERSION, 22, 0xffffffff);
         page.addView(title);
+        page.addView(text("Contours transparents de tes doigts au-dessus du clavier, vus par la caméra des VITURE Beast. "
+            + "Suivi automatique de l'écran et de la tête, aucun calibrage.", 14, 0xffb8c7d9));
 
-        TextView introduction = new TextView(this);
-        introduction.setText("CONTOURS DESSINÉS DES DOIGTS UNIQUEMENT. " +
-            "Sans vidéo des mains, sans peau affichée, sans calibrage. " +
-            "Suivi du téléphone et des doigts en temps réel, avec stabilisation.");
-        introduction.setTextSize(14);
-        introduction.setTextColor(0xffb8d4ee);
-        page.addView(introduction);
+        page.addView(section("Préparation"));
+        checklist = text("", 14, 0xffe0e6ee);
+        page.addView(checklist);
+        LinearLayout row1 = new LinearLayout(this);
+        row1.addView(button("Accessibilité", v -> openAccessibility()), weight());
+        row1.addView(button("Superposition", v -> startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:" + getPackageName())))), weight());
+        page.addView(row1);
+        page.addView(text("Le service d'accessibilité sert uniquement à dessiner AU-DESSUS du clavier "
+            + "(une surcouche normale passe dessous). Il ne lit rien. Si Android l'affiche grisé « paramètre restreint » : "
+            + "Infos de l'appli ▸ ⋮ ▸ « Autoriser les paramètres restreints », puis réessaie.", 12, 0xff8fa3b8));
 
-        LinearLayout buttons = new LinearLayout(this);
-        page.addView(buttons);
-        Button scan = new Button(this);
-        scan.setText("DÉTECTER");
-        buttons.addView(scan, new LinearLayout.LayoutParams(0, dp(52), 1));
-        scan.setOnClickListener(v -> scan());
-        Button start = new Button(this);
-        start.setText("DÉMARRER");
-        buttons.addView(start, new LinearLayout.LayoutParams(0, dp(52), 1));
-        start.setOnClickListener(v -> requestStart());
-        Button stop = new Button(this);
-        stop.setText("ARRÊTER");
-        buttons.addView(stop, new LinearLayout.LayoutParams(0, dp(52), 1));
-        stop.setOnClickListener(v -> stopOverlay());
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setPadding(0, dp(12), 0, 0);
+        Button startB = button("DÉMARRER", v -> start());
+        startB.setBackgroundColor(0xff1f8a4c); startB.setTextColor(0xffffffff);
+        Button stopB = button("ARRÊTER", v -> stopService(new Intent(this, FingerService.class)));
+        row2.addView(startB, weight());
+        row2.addView(stopB, weight());
+        page.addView(row2);
+        statsView = text("", 12, 0xff9be7b4);
+        page.addView(statsView);
 
-        TextView automatic=label("AUTOMATIQUE : La caméra des Beast détecte " +
-            "le téléphone et uniquement les bouts de doigts au-dessus de son écran. " +
-            "Aucun calibrage manuel, aucun geste simulé. " +
-            "Si le téléphone sort du champ, les doigts disparaissent.");
-        automatic.setTextColor(0xffa4ffd8);
-        page.addView(automatic);
+        page.addView(section("Apparence"));
+        page.addView(slider("Opacité du contour", "alpha", 20, 100, 92, "%"));
+        page.addView(slider("Épaisseur du contour", "stroke", 1, 8, 3, " dp"));
+        page.addView(check("Voile très léger à l'intérieur des doigts", "fill", true));
+        page.addView(check("Prédiction du mouvement (réduit le retard)", "predict", true));
 
-        TextView modeTitle = label("Afficher la surimpression sur");
-        page.addView(modeTitle);
-        screenSpinner = new Spinner(this);
-        String[] modes = {
-            "Téléphone / miroir (RECOMMANDÉ)",
-            "VITURE Beast / écran externe indépendant (test)"
-        };
-        ArrayAdapter<String> modesAdapter = new ArrayAdapter<>(this,
-            android.R.layout.simple_spinner_dropdown_item, modes);
-        screenSpinner.setAdapter(modesAdapter);
-        screenSpinner.setSelection(target);
-        page.addView(screenSpinner);
-        screenSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(android.widget.AdapterView<?> parent,
-                    View view, int position, long id) {
-                target = position;
-                onSettingChanged();
-            }
-            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        page.addView(section("Repérage de l'écran"));
+        page.addView(check("Cadre de repérage sur le bord de l'écran (indispensable en thème sombre)", "frame", true));
+        page.addView(slider("Épaisseur du cadre", "frameWidth", 4, 16, 9, " dp"));
+        page.addView(check("Caméra à l'envers (rotation 180°)", "rotate180", false));
+        page.addView(check("Image caméra en miroir", "mirror", false));
+
+        page.addView(section("Diagnostic"));
+        previewCheck = new CheckBox(this);
+        previewCheck.setText("Afficher ce que voit la caméra (vert = écran détecté, violet = contours)");
+        previewCheck.setTextColor(0xffffffff);
+        previewCheck.setOnCheckedChangeListener((cb, on) -> {
+            FingerService.previewWanted = on;
+            previewView.setVisibility(on ? View.VISIBLE : View.GONE);
+            main.removeCallbacks(ticker); main.post(ticker);
         });
-
-        alphaSlider = addSlider(page, "VISIBILITÉ DU CONTOUR", 20, 95, alpha,
-            value -> { alpha = value; onSettingChanged(); });
-        scaleSlider = addSlider(page, "TAILLE DES CONTOURS", 50, 180, scale,
-            value -> { scale = value; onSettingChanged(); });
-        mirrorCheck = new CheckBox(this);
-        mirrorCheck.setText("Inverser horizontalement les bouts des doigts");
-        mirrorCheck.setTextColor(0xffffffff);
-        mirrorCheck.setChecked(mirror);
-        page.addView(mirrorCheck);
-        mirrorCheck.setOnCheckedChangeListener((buttonView, checked) -> {
-            mirror = checked;
-            onSettingChanged();
-        });
-
-        settingsSummary = new TextView(this);
-        settingsSummary.setTextSize(13);
-        settingsSummary.setTextColor(0xffa9e1ad);
-        page.addView(settingsSummary);
-
-        TextView help = new TextView(this);
-        help.setText("MODE D'EMPLOI\n" +
-            "1. Branche les Beast et appuie sur DÉMARRER.\n" +
-            "2. Tape normalement sur le clavier du téléphone.\n" +
-            "3. De petits contours clairs sont dessinés uniquement pour les " +
-            "doigts détectés au-dessus de l'écran du téléphone.\n" +
-            "4. Les contours sont stabilisés automatiquement ; pas de X/Y " +
-            "à régler et aucun calibrage manuel.\n" +
-            "5. Le bouton Photo de diagnostic sert uniquement à voir le champ " +
-            "réel de la caméra, il n'affiche jamais cette image sur le clavier.\n\n" +
-            "Limitations : contours approximatifs en 2D. La caméra RGB seule " +
-            "ne donne pas la distance exacte du doigt à la vitre.");
-        help.setTextColor(0xffb8cde1);
-        help.setTextSize(13);
-        page.addView(help);
-
-        TextView logTitle = label("DIAGNOSTIC");
-        page.addView(logTitle);
-        Button preview=new Button(this);
-        preview.setText("VÉRIFIER LE CHAMP DE LA CAMÉRA (PHOTO)");
-        page.addView(preview);
-        preview.setOnClickListener(v->{
-            if(!getSharedPreferences(PREFS,MODE_PRIVATE).getBoolean("running",false)){
-                report("Démarre d'abord la caméra.");
-                return;
-            }
-            try{
-                startService(new Intent(this,OverlayCameraService.class)
-                    .setAction(OverlayCameraService.ACTION_SNAPSHOT));
-            }catch(RuntimeException e){
-                report("Impossible de voir la caméra : "+e.getMessage());
-            }
-        });
-        TextView previewHelp=label("Ce bouton sert uniquement au diagnostic : " +
-            "photo temporaire de ce que voient les Beast. Rien n'est sauvegardé. " +
-            "Il n'affiche pas la vidéo par-dessus le clavier.");
-        page.addView(previewHelp);
-        status = new TextView(this);
-        status.setTextColor(0xff91f7ba);
-        status.setTextSize(12);
-        status.setTextIsSelectable(true);
-        page.addView(status);
-
-        Button copy = new Button(this);
-        copy.setText("COPIER LE DIAGNOSTIC");
-        page.addView(copy);
-        copy.setOnClickListener(v -> {
-            ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
-                .setPrimaryClip(ClipData.newPlainText("Beast FingerCam v0.7", log.toString()));
-            report("Diagnostic copié.");
-        });
+        page.addView(previewCheck);
+        previewView = new ImageView(this);
+        previewView.setAdjustViewBounds(true);
+        previewView.setBackgroundColor(0xff000000);
+        previewView.setVisibility(View.GONE);
+        page.addView(previewView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        page.addView(button("Copier le journal", v -> {
+            getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Beast Fingers",
+                log + "\n" + FingerService.stats));
+            report("Journal copié.");
+        }));
+        logView = text("", 12, 0xffa9b8c8);
+        logView.setTextIsSelectable(true);
+        page.addView(logView);
     }
 
-    private void showCameraDiagnostic(Bitmap snapshot){
-        ImageView preview=new ImageView(this);
-        preview.setImageBitmap(snapshot);
-        preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        preview.setAdjustViewBounds(true);
-        preview.setBackgroundColor(android.graphics.Color.BLACK);
-        int height=Math.max(dp(190),getResources().getDisplayMetrics().heightPixels/2);
-        android.widget.ScrollView scroll=new android.widget.ScrollView(this);
-        scroll.addView(preview,new android.widget.ScrollView.LayoutParams(
-            android.widget.ScrollView.LayoutParams.MATCH_PARENT,height));
-        new AlertDialog.Builder(this)
-            .setTitle("Caméra des Beast — photo de diagnostic")
-            .setMessage("Vérifie si les doigts au-dessus de l'écran sont visibles " +
-                "dans cette photo. Elle n'est pas enregistrée.")
-            .setView(scroll)
-            .setPositiveButton("FERMER",(dialog,which)->{})
-            .setOnDismissListener(dialog->{
-                preview.setImageDrawable(null);
-                CalibrationFrameHolder.clear(snapshot);
-            })
-            .show();
-        report("Photo caméra affichée : "+snapshot.getWidth()+"×"+
-            snapshot.getHeight()+" (aucun calibrage nécessaire).");
+    private LinearLayout.LayoutParams weight() {
+        return new LinearLayout.LayoutParams(0, dp(52), 1);
     }
 
-    private void showCalibration(Bitmap snapshot) {
-        final android.app.Dialog[] controllerDialog=new android.app.Dialog[1];
-        final android.app.Presentation[] beastPresentation=new android.app.Presentation[1];
-        final PhoneCalibrationView[] beastPreview=new PhoneCalibrationView[1];
-
-        PhoneCalibrationView controller=new PhoneCalibrationView(this,snapshot,pts->{
-            android.content.SharedPreferences.Editor saved=
-                getSharedPreferences(PREFS,MODE_PRIVATE).edit();
-            for(int i=0;i<pts.length;i++)saved.putFloat("phone_quad_"+i,pts[i]);
-            saved.putBoolean("phone_quad_ready",true).apply();
-            report("Calibrage validé : quatre coins de l'écran enregistrés (source "+
-                snapshot.getWidth()+"×"+snapshot.getHeight()+").");
-            if(controllerDialog[0]!=null)controllerDialog[0].dismiss();
-        });
-        controller.setProgressListener((points,completed)->{
-            if(beastPreview[0]!=null)beastPreview[0].setPreviewPoints(points,completed);
-            report("Calibration : coin "+completed+"/4 sélectionné.");
-        });
-
-        // The phone remains the touch controller. In the glasses, show the
-        // SAME native 16:9 camera image fitted to the real external display.
-        try {
-            DisplayManager dm=(DisplayManager)getSystemService(DISPLAY_SERVICE);
-            android.view.Display external=null;
-            for(android.view.Display d:dm.getDisplays()){
-                if(d.getDisplayId()==android.view.Display.DEFAULT_DISPLAY)continue;
-                if(external==null)external=d;
-                if(d.getName().toLowerCase(java.util.Locale.ROOT).contains("viture")){
-                    external=d;break;
-                }
-            }
-            if(external!=null){
-                android.app.Presentation p=new android.app.Presentation(this,external);
-                PhoneCalibrationView projected=
-                    new PhoneCalibrationView(p.getContext(),snapshot,null);
-                p.getWindow().setFlags(
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN);
-                p.setContentView(projected);
-                p.show();
-                if(p.getWindow()!=null){
-                    p.getWindow().setLayout(
-                        WindowManager.LayoutParams.MATCH_PARENT,
-                        WindowManager.LayoutParams.MATCH_PARENT);
-                }
-                beastPresentation[0]=p;
-                beastPreview[0]=projected;
-                android.graphics.Point screen=new android.graphics.Point();
-                external.getRealSize(screen);
-                report("CALIBRAGE PROJETÉ SUR BEAST : sortie "+screen.x+"×"+
-                    screen.y+" ; source caméra "+snapshot.getWidth()+"×"+
-                    snapshot.getHeight()+" (pas de réduction).");
-            }else report("Pas d'écran externe : calibration sur téléphone.");
-        }catch(RuntimeException error){
-            report("Présentation sur Beast indisponible : "+error+
-                ". Calibrage possible sur le téléphone.");
-        }
-
-        android.app.Dialog dialog=new android.app.Dialog(this);
-        controllerDialog[0]=dialog;
-        int width=getResources().getDisplayMetrics().widthPixels;
-        int height=getResources().getDisplayMetrics().heightPixels*9/10;
-        controller.setMinimumHeight(height);
-        dialog.setTitle("Calibrer la zone du téléphone — 4 coins");
-        dialog.setContentView(controller,new android.view.ViewGroup.LayoutParams(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,height));
-        dialog.setOnDismissListener(ignored->{
-            if(beastPresentation[0]!=null){
-                try{beastPresentation[0].dismiss();}catch(RuntimeException ignored2){}
-            }
-            CalibrationFrameHolder.clear(snapshot);
-            report("Calibrage fermé : retour à la projection normale.");
-        });
-        dialog.show();
-        if(dialog.getWindow()!=null)dialog.getWindow().setLayout(width,height+dp(45));
+    private TextView section(String s) {
+        TextView t = text(s.toUpperCase(Locale.FRANCE), 13, 0xff7cc4ff);
+        t.setPadding(0, dp(20), 0, dp(4));
+        return t;
     }
 
-    private interface SliderListener { void changed(int value); }
-    private SeekBar addSlider(LinearLayout parent, String title,
-            int minimum, int maximum, int current, SliderListener listener) {
-        TextView text = label(title);
-        parent.addView(text);
-        SeekBar seek = new SeekBar(this);
-        seek.setMax(maximum-minimum);
-        seek.setProgress(current-minimum);
-        parent.addView(seek);
-        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
-                listener.changed(progress + minimum);
+    private TextView text(String s, int sp, int color) {
+        TextView t = new TextView(this);
+        t.setText(s); t.setTextSize(sp); t.setTextColor(color);
+        t.setPadding(0, dp(4), 0, 0);
+        return t;
+    }
+
+    private Button button(String s, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(s); b.setOnClickListener(l); b.setAllCaps(false);
+        return b;
+    }
+
+    private CheckBox check(String label, String key, boolean def) {
+        CheckBox c = new CheckBox(this);
+        c.setText(label); c.setTextColor(0xffffffff);
+        c.setChecked(prefs.getBoolean(key, def));
+        c.setOnCheckedChangeListener((cb, on) -> { prefs.edit().putBoolean(key, on).apply(); pushConfig(); });
+        return c;
+    }
+
+    private View slider(String label, String key, int min, int max, int def, String unit) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        TextView t = text("", 14, 0xffffffff);
+        int cur = prefs.getInt(key, def);
+        t.setText(label + " : " + cur + unit);
+        SeekBar s = new SeekBar(this);
+        s.setMax(max - min);
+        s.setProgress(cur - min);
+        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int p, boolean user) {
+                t.setText(label + " : " + (p + min) + unit);
+                if (user) { prefs.edit().putInt(key, p + min).apply(); pushConfig(); }
             }
             @Override public void onStartTrackingTouch(SeekBar bar) { }
             @Override public void onStopTrackingTouch(SeekBar bar) { }
         });
-        return seek;
-    }
-    private TextView label(String text) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextColor(0xffffffff);
-        t.setTextSize(14);
-        t.setPadding(0, dp(11), 0, 0);
-        return t;
-    }
-    private int dp(int v) {
-        return (int)(getResources().getDisplayMetrics().density*v+0.5f);
+        box.addView(t); box.addView(s);
+        return box;
     }
 
-    private void readSettings() {
-        android.content.SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
-        alpha = p.getInt("alpha", 85);
-        scale = p.getInt("scale", 120);
-        target = p.getInt("target", 0);
-        mirror = p.getBoolean("mirror", false);
-    }
-    private void onSettingChanged() {
-        if (!initialized) return;
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putInt("alpha", alpha).putInt("scale", scale)
-            .putInt("target", target)
-            .putBoolean("mirror", mirror).apply();
-        showSettings();
-        // Only deliver adjustments to an already-running overlay.
-        // Intent with ACTION_CONFIG does not launch a new service.
-        if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("running", false)) {
-            Intent values = buildServiceIntent(OverlayCameraService.ACTION_CONFIG);
-            try { startService(values); } catch (RuntimeException e) {
-                report("Réglages non transmis : " + e.getMessage());
-            }
-        }
-    }
-    private void showSettings() {
-        if (settingsSummary == null) return;
-        settingsSummary.setText("Contours : " + alpha + "%  |  Taille : " + scale +
-            "%  |  Suivi automatique du téléphone  |  Écran : " + (target == 0 ? "téléphone" : "Beast"));
-    }
-    private Intent buildServiceIntent(String action) {
-        return new Intent(this, OverlayCameraService.class).setAction(action)
-            .putExtra(OverlayCameraService.EXTRA_ALPHA, alpha)
-            .putExtra(OverlayCameraService.EXTRA_SCALE, scale)
-            .putExtra(OverlayCameraService.EXTRA_FLIP, mirror)
-            .putExtra(OverlayCameraService.EXTRA_TARGET, target);
+    private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
+
+    private void pushConfig() {
+        if (FingerService.instance == null) return;
+        try { startService(new Intent(this, FingerService.class).setAction(FingerService.ACTION_CONFIG)); }
+        catch (RuntimeException ignored) { }
     }
 
-    private void report(String message) {
-        if (message == null) return;
-        main.post(() -> {
-            log.append(message).append('\n');
-            if (log.length() > 14000) log.delete(0, 4000);
-            if (status != null) status.setText(log.toString());
-        });
+    // ------------------------------------------------------------------ checklist / start
+    private boolean accessibilityEnabled() {
+        if (FingerAccessibilityService.instance != null) return true;
+        String enabled = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabled == null) return false;
+        String me = new ComponentName(this, FingerAccessibilityService.class).flattenToString();
+        TextUtils.SimpleStringSplitter sp = new TextUtils.SimpleStringSplitter(':');
+        sp.setString(enabled);
+        while (sp.hasNext()) if (sp.next().equalsIgnoreCase(me)) return true;
+        return false;
     }
-    private static boolean isCamera(UsbDevice d) {
-        return d != null && d.getVendorId() == 0x0C45 && d.getProductId() == 0x6368;
+
+    private void refreshChecklist() {
+        UsbDevice cam = FingerService.findCamera(usb);
+        boolean a11y = accessibilityEnabled();
+        boolean overlay = Settings.canDrawOverlays(this);
+        boolean camPerm = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+        StringBuilder s = new StringBuilder();
+        s.append(cam != null ? "✅ Caméra des Beast branchée" + (usb.hasPermission(cam) ? "" : " (permission USB demandée au démarrage)")
+            : "❌ Caméra des Beast non détectée (branche les lunettes)").append('\n');
+        s.append(a11y ? "✅ Service d'accessibilité actif : contours au-dessus du clavier"
+            : "⚠️ Service d'accessibilité inactif : sans lui les contours passent sous le clavier").append('\n');
+        if (!a11y) s.append(overlay ? "✅ Superposition autorisée (mode de secours)" : "❌ Superposition non autorisée").append('\n');
+        s.append(camPerm ? "✅ Autorisation caméra" : "• Autorisation caméra demandée au démarrage").append('\n');
+        DisplayManager dm = getSystemService(DisplayManager.class);
+        int ext = 0;
+        for (Display d : dm.getDisplays()) if (d.getDisplayId() != Display.DEFAULT_DISPLAY) ext++;
+        s.append(ext > 0 ? "ℹ️ Écran externe détecté : utilise le mode miroir (duplication) pour voir le clavier dans les lunettes"
+            : "ℹ️ Affichage : miroir de l'écran du téléphone");
+        checklist.setText(s);
     }
-    private UsbDevice findCamera() {
-        for (UsbDevice dev : usb.getDeviceList().values()) {
-            if (isCamera(dev)) return dev;
-        }
-        return null;
+
+    private void openAccessibility() {
+        try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
+        catch (RuntimeException e) { report("Réglages d'accessibilité introuvables : " + e.getMessage()); }
     }
-    private void scan() {
-        report("— PÉRIPHÉRIQUES USB —");
-        for (UsbDevice d : usb.getDeviceList().values()) {
-            report(String.format(Locale.US, "USB %04X:%04X / autorisation=%s",
-                d.getVendorId(), d.getProductId(), usb.hasPermission(d)));
-        }
-        report(findCamera() != null ? "Caméra Beast détectée !" : "Caméra Beast non connectée.");
-        DisplayManager dm = (DisplayManager)getSystemService(DISPLAY_SERVICE);
-        for (android.view.Display d : dm.getDisplays())
-            report("Écran #" + d.getDisplayId() + " : " + d.getName());
-        report("Overlay Android : " + (Settings.canDrawOverlays(this) ?
-            "autorisé" : "autorisation requise"));
-    }
-    private void requestStart() {
-        if (!NativeCameraBridge.available()) {
-            report("Erreur de chargement SDK : " + NativeCameraBridge.loadError());
-            return;
-        }
-        if (!Settings.canDrawOverlays(this)) {
-            report("Autorise l'affichage par-dessus les autres applications.");
-            Intent overlayPage = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:" + getPackageName()));
-            startActivity(overlayPage);
+
+    private void start() {
+        pendingStart = false;
+        if (!NativeCameraBridge.available()) { report("Bibliothèque native absente : " + NativeCameraBridge.loadError()); return; }
+        if (!accessibilityEnabled() && !Settings.canDrawOverlays(this)) {
+            report("Active le service d'accessibilité (recommandé) ou la superposition.");
+            openAccessibility();
             return;
         }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, 64);
+            pendingStart = true;
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
             return;
         }
-        UsbDevice camera = findCamera();
-        if (camera == null) {
-            report("Caméra USB introuvable. Branche les Beast et réessaie.");
-            scan();
+        UsbDevice cam = FingerService.findCamera(usb);
+        if (cam == null) { report("Caméra des Beast introuvable. Branche les lunettes."); return; }
+        if (!usb.hasPermission(cam)) {
+            pendingStart = true;
+            Intent i = new Intent(USB_PERMISSION).setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
+            usb.requestPermission(cam, PendingIntent.getBroadcast(this, 0, i, flags));
+            report("Accepte l'accès USB à la caméra.");
             return;
         }
-        if (!usb.hasPermission(camera)) {
-            report("Accepte la permission USB de la caméra.");
-            Intent i = new Intent(USB_PERMISSION_ACTION).setPackage(getPackageName());
-            PendingIntent pending = PendingIntent.getBroadcast(this, 0, i,
-                PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-            usb.requestPermission(camera, pending);
-            return;
-        }
-        startServiceNow();
-    }
-    private void startServiceNow() {
-        Intent i = buildServiceIntent(OverlayCameraService.ACTION_START);
+        if (FingerService.instance != null) { report("Déjà en marche."); return; }
+        prefs.edit().putBoolean("running", true).apply();
         try {
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
-            else startService(i);
-            report("Démarrage de la caméra flottante…");
+            startForegroundService(new Intent(this, FingerService.class).setAction(FingerService.ACTION_START));
+            report("Démarrage…");
         } catch (RuntimeException e) {
-            report("Démarrage refusé : " + e);
+            report("Démarrage refusé : " + e.getMessage());
         }
     }
-    private void stopOverlay() {
-        try {
-            stopService(new Intent(this, OverlayCameraService.class));
-            report("Demande d'arrêt du service caméra.");
-        } catch (RuntimeException e) {
-            report("Erreur d'arrêt : " + e);
+
+    @Override public void onRequestPermissionsResult(int code, String[] p, int[] g) {
+        super.onRequestPermissionsResult(code, p, g);
+        if (code == 1) {
+            if (g.length > 0 && g[0] == PackageManager.PERMISSION_GRANTED) { if (pendingStart) start(); }
+            else report("Autorisation caméra refusée : nécessaire pour la caméra USB.");
         }
     }
-    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] grants) {
-        super.onRequestPermissionsResult(code, permissions, grants);
-        if (code == 64) {
-            if (grants.length != 0 && grants[0] == PackageManager.PERMISSION_GRANTED)
-                requestStart();
-            else report("Autorisation caméra refusée.");
-        }
-    }
-    @Override protected void onResume() {
-        super.onResume();
-        if (initialized && status != null) showSettings();
-    }
-    @Override protected void onDestroy() {
-        if (receiversRegistered) {
-            unregisterReceiver(events);
-            unregisterReceiver(statusReceiver);
-        }
-        if (calibrationReceiverRegistered) unregisterReceiver(calibrationReceiver);
-        super.onDestroy();
+
+    private void report(String m) {
+        if (m == null) return;
+        main.post(() -> {
+            log.append(m).append('\n');
+            if (log.length() > 12000) log.delete(0, 3000);
+            if (logView != null) logView.setText(log);
+        });
     }
 }

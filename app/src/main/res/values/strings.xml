@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Beast Fingers</string>
+    <string name="a11y_label">Beast Fingers – contours au-dessus du clavier</string>
+    <string name="a11y_desc">Sert uniquement à afficher les contours de tes doigts AU-DESSUS du clavier (une surcouche ordinaire passe dessous). Ce service ne lit aucun contenu de l\'écran et ne reçoit aucun événement.</string>
+</resources>

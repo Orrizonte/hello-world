@@ -24,13 +24,7 @@ unzip -p "$ROOT/tasks-vision.aar" jni/arm64-v8a/libmediapipe_tasks_vision_jni.so
 curl -fLsS --retry 3 --max-time 90 \
     'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' \
     -o "$ROOT/asset/hand_landmarker.task"
-# On-device smartphone detection: official MediaPipe COCO EfficientDet-Lite0
-# INT8, 320x320. This also runs completely offline at application runtime.
-curl -fLsS --retry 3 --max-time 90 \
-    'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/latest/efficientdet_lite0.tflite' \
-    -o "$ROOT/asset/efficientdet_lite0_int8.tflite"
-test "$(stat -c%s "$ROOT/asset/efficientdet_lite0_int8.tflite")" -gt 1000000
-echo "Official phone recognition model bundled"
+
 
 # Direct runtime dependencies declared by Google's AAR POM files.
 get_maven com.google.guava guava 27.0.1-android
@@ -95,7 +89,7 @@ for check in \
   done
 
 cat > "$ROOT/asset/MEDIAPIPE-LICENSE-NOTICE.txt" <<'EOF'
-MediaPipe Tasks for Android, hand_landmarker.task and EfficientDet-Lite0 object detection model.
+MediaPipe Tasks for Android and hand_landmarker.task model.
 Copyright 2026 Google LLC and MediaPipe Authors.
 Licensed under the Apache License, Version 2.0:
 https://www.apache.org/licenses/LICENSE-2.0
