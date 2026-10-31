@@ -32,6 +32,8 @@ public final class FingertipDetector implements AutoCloseable {
     private final HandLandmarker handLandmarker;
     private final AutoPhoneTracker phoneTracker;
     private final PhoneFingerSegmenter fingerSegmenter = new PhoneFingerSegmenter();
+    private final TipTemporalFilter temporalFilter = new TipTemporalFilter();
+    private long lastVideoTimeMs;
     private final Context context;
     public static final int[] TIPS={4,8,12,16,20};
     public static final int[] NEAR_TIPS={3,7,11,15,19};
@@ -65,7 +67,7 @@ public final class FingertipDetector implements AutoCloseable {
 
     public static final class Patch {
         public final Bitmap image;
-        public final float x,y,rx,ry;
+        public float x,y,rx,ry;
         Patch(Bitmap image,float x,float y,float rx,float ry){
             this.image=image;this.x=x;this.y=y;this.rx=rx;this.ry=ry;
         }
@@ -79,7 +81,8 @@ public final class FingertipDetector implements AutoCloseable {
         HandLandmarker.HandLandmarkerOptions opts=
             HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(model)
-                .setRunningMode(RunningMode.IMAGE)
+                .setRunningMode(RunningMode.VIDEO)
+                .setMinTrackingConfidence(.52f)
                 .setNumHands(2)
                 .setMinHandDetectionConfidence(.40f)
                 .setMinHandPresenceConfidence(.40f)
@@ -107,7 +110,13 @@ public final class FingertipDetector implements AutoCloseable {
         try {
             // The phone is tracked in every frame, not just once.
             phone=phoneTracker.locate(reduced);
-            handResult=handLandmarker.detect(new BitmapImageBuilder(reduced).build());
+            // Google MediaPipe sample: VIDEO mode reuses tracked landmarks,
+            // rather than searching for a fresh palm on every USB camera image.
+            long now=android.os.SystemClock.uptimeMillis();
+            if(now<=lastVideoTimeMs)now=lastVideoTimeMs+1;
+            lastVideoTimeMs=now;
+            handResult=handLandmarker.detectForVideo(
+                new BitmapImageBuilder(reduced).build(),now);
         }finally {
             if(reduced!=original)reduced.recycle();
         }
@@ -120,6 +129,7 @@ public final class FingertipDetector implements AutoCloseable {
         phoneVisible=phone!=null;
         if(phone==null){
             fingerSegmenter.reset();
+            temporalFilter.reset();
             lastSkinPixels=0;
             lastMovingPixels=0;
             lastFallbackRegions=0;
@@ -161,14 +171,15 @@ public final class FingertipDetector implements AutoCloseable {
                 int cx=Math.round(u*w),cy=Math.round(v*h);
                 if(cx-r<0||cy-r<0||cx+r>=w||cy+r>=h)continue;
                 // Extract ONLY a small fingertip image, never the whole hand.
-                Bitmap crop=Bitmap.createBitmap(original,cx-r,cy-r,2*r,2*r);
-                Bitmap feathered=feather(crop);
-                crop.recycle();
+                // Draw a translucent XR-style capsule around the detected
+                // fingertip. No source camera pixels reach the overlay.
+                Bitmap drawn=FingerOutlinePainter.landmark(
+                    tip.x(),tip.y(),joint.x(),joint.y());
                 // Project pixel size relative to the current apparent size
                 // of the phone, not relative to the entire camera frame.
                 float radiusX=Math.max(.009f,Math.min(.085f,r/(w*glass.width())));
                 float radiusY=Math.max(.006f,Math.min(.11f,r/(h*glass.height())));
-                patches.add(new Patch(feathered,px,py,radiusX,radiusY));
+                patches.add(new Patch(drawn,px,py,radiusX,radiusY));
             }
         }
         // Trust MediaPipe fingertips when visible; add skin motion fragments
@@ -185,7 +196,7 @@ public final class FingertipDetector implements AutoCloseable {
                 patches.add(skin);
             else skin.release();
         }
-        return patches;
+        return temporalFilter.apply(patches);
     }
 
     private static Bitmap feather(Bitmap src){
