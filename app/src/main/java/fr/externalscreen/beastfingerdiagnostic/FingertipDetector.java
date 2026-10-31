@@ -170,13 +170,21 @@ public final class FingertipDetector implements AutoCloseable {
                 patches.add(new Patch(feathered,px,py,radiusX,radiusY));
             }
         }
-        if(!patches.isEmpty()){
-            // Prefer ML-localised fingertips when a whole hand is visible.
-            // Avoid overlaying two copies of the same pixels.
-            for(Patch p:skinRegions)p.release();
-            return patches;
+        // Trust MediaPipe fingertips when visible; add skin motion fragments
+        // only when they do not duplicate a recognized fingertip position.
+        // This handles a partly visible hand without showing 12 fragments.
+        for(Patch skin:skinRegions){
+            boolean duplicate=false;
+            for(Patch ml:patches){
+                if(Math.hypot(ml.x-skin.x,ml.y-skin.y)<.085f){
+                    duplicate=true;break;
+                }
+            }
+            if(!duplicate && patches.size()<5)
+                patches.add(skin);
+            else skin.release();
         }
-        return skinRegions;
+        return patches;
     }
 
     private static Bitmap feather(Bitmap src){
