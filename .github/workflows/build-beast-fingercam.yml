@@ -1,4 +1,4 @@
-name: Build Beast FingerCam diagnostic
+name: Build Beast FingerCam Viture USB
 on:
   push:
     branches:
@@ -24,16 +24,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Install Android API 35
+      - name: Android SDK, NDK and CMake
         run: |
           SDK_MANAGER="/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager"
-          test -x "$SDK_MANAGER"
-          "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0"
-      - name: Build APK
+          "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Build diagnostic APK (without proprietary Viture SDK)
         run: gradle --no-daemon --stacktrace assembleDebug
-      - name: Upload diagnostic APK
+      - name: Collect APK and Android signing utilities
+        run: |
+          mkdir -p signing-tools
+          cp /usr/local/lib/android/sdk/build-tools/35.0.0/lib/apksigner.jar signing-tools/
+          cp /usr/local/lib/android/sdk/build-tools/35.0.0/zipalign signing-tools/
+      - name: Upload APK and local signing utilities
         uses: actions/upload-artifact@v4
         with:
-          name: BeastFingerCam-v0.4-Camera2-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: BeastFingerCam-v0.5-stage1
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            signing-tools/apksigner.jar
+            signing-tools/zipalign
           retention-days: 7
