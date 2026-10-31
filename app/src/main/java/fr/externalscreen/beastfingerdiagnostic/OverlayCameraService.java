@@ -39,6 +39,7 @@ public final class OverlayCameraService extends Service {
     private final ExecutorService usbWorker = Executors.newSingleThreadExecutor();
     private final ExecutorService decodeWorker = Executors.newSingleThreadExecutor();
     private final AtomicBoolean decodeBusy = new AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicLong lastAnalysisMs = new java.util.concurrent.atomic.AtomicLong(0);
     private volatile boolean running;
     private boolean starting;
     private UsbDeviceConnection connection;
@@ -53,18 +54,23 @@ public final class OverlayCameraService extends Service {
     private int scale = 80;
     private int offsetX = 0;
     private int offsetY = 0;
-    private int targetDisplay = 0; // 0=phone/mirrored; 1=Viture external
+    private int targetDisplay = 1; // prefer native-resolution Viture output
     private boolean flip;
     private int frames;
 
     private final NativeCameraBridge.FrameListener listener = bytes -> {
-        if (!running || !decodeBusy.compareAndSet(false, true)) return;
+        if (!running) return;
+        // ~12 FPS hand tracking; camera itself stays at the native 1920x1080.
+        long now = SystemClock.elapsedRealtime();
+        if (!snapshotRequested && now - lastAnalysisMs.get() < 82) return;
+        if (!decodeBusy.compareAndSet(false, true)) return;
+        lastAnalysisMs.set(now);
         int count = ++frames;
         decodeWorker.execute(() -> {
             Bitmap bitmap = null;
             try {
                 BitmapFactory.Options options = new BitmapFactory.Options();
-                options.inSampleSize = 2;
+                options.inSampleSize = 1; // preserve full 1920x1080 camera detail
                 bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
                 if (bitmap == null) {
                     if (count <= 3) status("Image MJPEG non décodable");
@@ -73,12 +79,12 @@ public final class OverlayCameraService extends Service {
                 if (snapshotRequested) {
                     snapshotRequested = false;
                     // Keep calibration snapshot in memory only, never save or upload.
-                    Bitmap small=Bitmap.createScaledBitmap(bitmap,640,360,true);
+                    Bitmap small=Bitmap.createScaledBitmap(bitmap,1280,720,true);
                     java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
                     small.compress(Bitmap.CompressFormat.JPEG,65,output);
                     if (small!=bitmap)small.recycle();
                     byte[] jpeg=output.toByteArray();
-                    if (jpeg.length<250000) {
+                    if (jpeg.length<700000) {
                         Intent preview=new Intent(ACTION_CALIBRATION_FRAME).setPackage(getPackageName());
                         preview.putExtra("jpeg",jpeg);
                         sendBroadcast(preview);
@@ -90,7 +96,11 @@ public final class OverlayCameraService extends Service {
                         detector = new FingertipDetector(getApplicationContext());
                         status("MediaPipe initialisé : suivi des bouts des doigts.");
                     } catch (Throwable e) {
-                        detectorError = e.toString();
+                        StringBuilder trace=new StringBuilder(e.toString());
+                        Throwable cause=e.getCause();
+                        for(int i=0;cause!=null && i<3;i++,cause=cause.getCause())
+                            trace.append(" → ").append(cause.toString());
+                        detectorError=trace.toString();
                         status("Erreur initialisation MediaPipe : " + detectorError);
                     }
                 }
@@ -108,8 +118,9 @@ public final class OverlayCameraService extends Service {
                         if (tips>0)status("Bouts de doigts visibles sur l'écran : " + tips);
                     }
                     if (count <= 3 || count % 120 == 0) {
-                        status("MediaPipe : image " + count + " / " + tips +
-                            " bouts de doigts dans la zone du téléphone");
+                        status("MediaPipe : image " + count + " / source " +
+                            1920 + "×" + 1080 + " / " + tips +
+                            " bouts de doigts détectés sur l'écran");
                     }
                 });
             } catch (Throwable ex) {
@@ -180,7 +191,7 @@ public final class OverlayCameraService extends Service {
                 return START_NOT_STICKY;
             }
             starting = true;
-            getSharedPreferences("settings.v07", MODE_PRIVATE).edit().putBoolean("running", true).apply();
+            getSharedPreferences("settings.v081", MODE_PRIVATE).edit().putBoolean("running", true).apply();
             showOverlay();
             startUsbCamera();
         } else if (ACTION_CONFIG.equals(action) && windowManager != null) {
@@ -260,22 +271,45 @@ public final class OverlayCameraService extends Service {
             : displayContext;
         windowManager = (WindowManager)windowContext.getSystemService(WINDOW_SERVICE);
         tipsView = new FingertipOverlayView(windowContext);
+        android.graphics.Point projectedSize = new android.graphics.Point();
+        display.getRealSize(projectedSize);
+        if (projectedSize.x<100 || projectedSize.y<100)
+            throw new IllegalStateException("Dimensions d'affichage invalides");
+        // Native physical pixel coordinates of the actual Viture projection.
         overlayParams = new WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            projectedSize.x, projectedSize.y,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             android.graphics.PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.TOP | Gravity.LEFT;
-        overlayParams.setTitle("Beast FingerCam — tips only");
+        overlayParams.x = 0;
+        overlayParams.y = 0;
+        overlayParams.setTitle("Beast FingerCam — only fingertips / full projector resolution");
         overlayParams.alpha = 0.75f;
         tipsView.setSettings(alpha, scale, offsetX, offsetY, flip);
+        Display phone = ((DisplayManager)getSystemService(DISPLAY_SERVICE))
+            .getDisplay(Display.DEFAULT_DISPLAY);
+        if (phone!=null && display.getDisplayId()!=Display.DEFAULT_DISPLAY) {
+            android.graphics.Point phoneSize=new android.graphics.Point();
+            phone.getRealSize(phoneSize);
+            float phoneAspect=phoneSize.y>0?phoneSize.x/(float)phoneSize.y:1f;
+            tipsView.setProjectedPhoneAspect(phoneAspect,true);
+            status("Projection clavier conservant le ratio du téléphone : "+
+                phoneSize.x+"×"+phoneSize.y);
+        }
+        tipsView.addOnLayoutChangeListener((v,left,top,right,bottom,ol,ot,or_,ob)->{
+            if (right-left != or_-ol || bottom-top != ob-ot)
+                status("Surface doigts : " + (right-left) + "×" + (bottom-top) +
+                    " pixels (projection Beast " + projectedSize.x + "×" + projectedSize.y + ")");
+        });
         windowManager.addView(tipsView, overlayParams);
-        status("Overlay DOIGTS UNIQUEMENT sur écran #" + display.getDisplayId() +
-            " (" + display.getName() + "). Aucune vidéo de fond.");
+        status("Overlay DOIGTS UNIQUEMENT : écran #" + display.getDisplayId() +
+            " (" + display.getName() + "), " + projectedSize.x + "×" + projectedSize.y +
+            " pixels réels. Pas de fond vidéo.");
         if (!getSharedPreferences(FingertipDetector.PREFS, MODE_PRIVATE)
             .getBoolean("phone_quad_ready", false))
             status("CALIBRAGE REQUIS : ouvre FingerCam, touche CALIBRER puis les 4 coins de l'écran.");
