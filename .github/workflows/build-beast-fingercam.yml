@@ -4,6 +4,9 @@ on:
     branches:
       - build/beast-fingercam-android-20261031
   workflow_dispatch:
+  pull_request:
+    branches:
+      - master
 permissions:
   contents: read
 jobs:
