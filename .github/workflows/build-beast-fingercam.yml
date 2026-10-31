@@ -24,30 +24,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Install native tools
+      - name: Install Android API 35
         run: |
-          SDK_ROOT="/usr/local/lib/android/sdk"
-          SDK_MANAGER="$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"
+          SDK_MANAGER="/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager"
           test -x "$SDK_MANAGER"
-          yes | "$SDK_MANAGER" --licenses >/dev/null || true
-          "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
-      - name: Download Viture Android SDK for private build
-        run: |
-          python3 - <<'PY'
-          import urllib.request
-          from pathlib import Path
-          url = "https://raw.githubusercontent.com/janspants11/viture-headlock/main/VITURE_XR_Glasses_SDK_for_Android.zip"
-          print("Fetching Viture SDK from a public third-party mirror for ephemeral build only.")
-          urllib.request.urlretrieve(url, "/tmp/viture_sdk.zip")
-          print("SDK bytes:", Path("/tmp/viture_sdk.zip").stat().st_size)
-          PY
-          python3 prepare_sdk.py /tmp/viture_sdk.zip
-          rm -f /tmp/viture_sdk.zip
+          "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0"
       - name: Build APK
         run: gradle --no-daemon --stacktrace assembleDebug
       - name: Upload diagnostic APK
         uses: actions/upload-artifact@v4
         with:
-          name: BeastFingerCam-v0.3-debug-apk
+          name: BeastFingerCam-v0.4-Camera2-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
