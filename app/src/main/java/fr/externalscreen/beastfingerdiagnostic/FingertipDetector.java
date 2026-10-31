@@ -37,6 +37,14 @@ public final class FingertipDetector implements AutoCloseable {
     public static final int[] TIPS = {4, 8, 12, 16, 20};
     public static final int[] NEAR_TIPS = {3, 7, 11, 15, 19};
     private static final int DETECT_WIDTH = 640;
+    private volatile int lastHands;
+    private volatile int lastInside;
+    private volatile int lastCandidates;
+    private volatile boolean lastCalibrated;
+    public int lastHands(){ return lastHands; }
+    public int lastInside(){ return lastInside; }
+    public int lastCandidates(){ return lastCandidates; }
+    public boolean hasCalibration(){ return lastCalibrated; }
 
     public static final class Patch {
         public final Bitmap image;
@@ -58,8 +66,8 @@ public final class FingertipDetector implements AutoCloseable {
                 .setBaseOptions(options)
                 .setRunningMode(RunningMode.IMAGE)
                 .setNumHands(2)
-                .setMinHandDetectionConfidence(0.55f)
-                .setMinHandPresenceConfidence(0.50f)
+                .setMinHandDetectionConfidence(0.40f)
+                .setMinHandPresenceConfidence(0.40f)
                 .build();
         model = HandLandmarker.createFromOptions(this.context, settings);
     }
@@ -80,8 +88,11 @@ public final class FingertipDetector implements AutoCloseable {
      * with feathered boundaries; surrounding video is never drawn.
      */
     public List<Patch> process(Bitmap original) {
+        if (original == null) return Collections.emptyList();
         float[] quad=savedQuad();
-        if (quad == null || original == null) return Collections.emptyList();
+        lastCalibrated = quad != null;
+        lastInside=0;
+        lastCandidates=0;
         int w=original.getWidth(), h=original.getHeight();
         int newW=Math.min(DETECT_WIDTH,w);
         int newH=Math.max(1,Math.round(h*newW/(float)w));
@@ -92,6 +103,10 @@ public final class FingertipDetector implements AutoCloseable {
         } finally {
             if (input != original) input.recycle();
         }
+        lastHands = result.landmarks().size();
+        // Evaluate the landmark detector even before phone calibration, so
+        // diagnostic can distinguish "no hand found" from "outside phone zone".
+        if (quad == null) return Collections.emptyList();
         float[] dst={0,0, 1,0, 1,1, 0,1};
         Matrix transform=new Matrix();
         // This is a full homography: the camera can see the phone at an angle.
@@ -104,6 +119,7 @@ public final class FingertipDetector implements AutoCloseable {
         for (List<NormalizedLandmark> hand: result.landmarks()) {
             if (hand.size()<21) continue;
             for (int finger=0;finger<5;finger++) {
+                lastCandidates++;
                 NormalizedLandmark tip=hand.get(TIPS[finger]);
                 NormalizedLandmark joint=hand.get(NEAR_TIPS[finger]);
                 float u=tip.x(), v=tip.y();
@@ -112,6 +128,7 @@ public final class FingertipDetector implements AutoCloseable {
                 // Require the actual fingertip to project INSIDE the phone screen.
                 // Exclude the very edges to suppress parts of fingers outside it.
                 if (!(uv[0]>=0f && uv[0]<=1f && uv[1]>=0f && uv[1]<=1f))continue;
+                lastInside++;
                 float distance=(float)Math.hypot((tip.x()-joint.x())*w,
                                                 (tip.y()-joint.y())*h);
                 float sourceRadius=Math.max(10f,Math.min(38f,distance*1.15f));
