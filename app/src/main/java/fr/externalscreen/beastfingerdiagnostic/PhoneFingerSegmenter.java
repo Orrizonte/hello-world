@@ -266,37 +266,15 @@ public final class PhoneFingerSegmenter {
             int minY=Math.max(0,region.minY-2);
             int maxY=Math.min(outH-1,region.maxY+2);
             int patchW=maxX-minX+1,patchH=maxY-minY+1;
-            int[] rgba=new int[patchW*patchH];
-            int filled=0;
-            for(int yy=minY;yy<=maxY;yy++){
-                for(int xx=minX;xx<=maxX;xx++){
-                    int src=yy*outW+xx;
-                    // Critical bug fix: do not paint pixels from other
-                    // connected components previously marked visited.
-                    if(components[src]!=region.id)continue;
-                    int close=0;
-                    for(int dy=-1;dy<=1;dy++){
-                        for(int dx=-1;dx<=1;dx++){
-                            int ax=xx+dx,ay=yy+dy;
-                            if(ax>=0&&ax<outW&&ay>=0&&ay<outH&&
-                               components[ay*outW+ax]==region.id)close++;
-                        }
-                    }
-                    int alpha=close>=7?220:close>=4?155:85;
-                    rgba[(yy-minY)*patchW+(xx-minX)]=(alpha<<24)|
-                        (pixels[src]&0x00ffffff);
-                    filled++;
-                }
-            }
-            if(filled<minComponent)continue;
-            Bitmap skin=Bitmap.createBitmap(rgba,patchW,patchH,
-                Bitmap.Config.ARGB_8888);
+            Bitmap drawn=FingerOutlinePainter.componentOutline(
+                components,region.id,outW,outH,minX,minY,maxX,maxY);
+            if(drawn==null)continue;
             float rx=patchW/(2f*outW),ry=patchH/(2f*outH);
             result.add(new FingertipDetector.Patch(
-                skin,centerX,centerY,rx,ry));
+                drawn,centerX,centerY,rx,ry));
             // Conservative limit: don't show a swarm of unrelated image
             // fragments. Actual ML fingertips are handled separately.
-            if(result.size()>=4)break;
+            if(result.size()>=3)break;
         }
         priorCount=nextCount;
         System.arraycopy(nextXs,0,priorCentersX,0,nextCount);
