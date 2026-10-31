@@ -178,7 +178,6 @@ public class SyntheticBench {
             }
             double iou = uni == 0 ? 1 : inter / uni;
             if (handsOn && f >= (early ? 15 : 35)) { iouSum += iou; iouN++; }
-            if (System.getenv("PERF") != null) { double e=0; if (res.quad!=null) for (int i=0;i<8;i++) e=Math.max(e,Math.abs(res.quad[i]-q[i])); try { System.out.printf("F%d mode=%d err=%.1f true=%s got=%s%n", f, fr.externalscreen.beastfingerdiagnostic.N.mode(fp), e, java.util.Arrays.toString(q), res.quad==null?"-":java.util.Arrays.toString(res.quad)); } catch (Exception ex) {} }
             if (f % 10 == 0 || f == frames - 1)
                 System.out.printf("f%02d %3dms hands=%b iou=%.3f fp=%.0f | %s%n", f, dt, handsOn, iou, uni - inter, res.diag);
             if (dump != null && (f == 2 || f == 10 || f == 40 || f == 80)) { dumpFrame(img, res, s, dump + "/" + sc + "_" + f); try { Class.forName("Dbg").getMethod("dump", FingerSegmenter.class, String.class).invoke(null, s, dump + "/" + sc + "_" + f + "_fields.png"); } catch (Throwable e) { } }
