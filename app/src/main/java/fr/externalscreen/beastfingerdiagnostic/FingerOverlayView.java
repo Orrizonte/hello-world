@@ -36,6 +36,10 @@ final class FingerOverlayView extends View {
     private boolean frameOn = true;
     private float frameWidth = 26f;
     private boolean predict = true;
+    private volatile boolean blink;
+
+    /** While the screen is being searched, the frame blinks (verified by the camera). */
+    void setBlink(boolean b) { if (b != blink) { blink = b; postInvalidateOnAnimation(); } }
 
     FingerOverlayView(Context c) {
         super(c);
@@ -90,7 +94,8 @@ final class FingerOverlayView extends View {
     @Override protected void onDraw(Canvas canvas) {
         canvas.save();
         canvas.translate(-loc[0], -loc[1]); // draw in display coordinates
-        if (frameOn && frameWidth > 0) {
+        boolean frameVisible = !blink || (SystemClock.uptimeMillis() / 130) % 2 == 0;
+        if (frameOn && frameWidth > 0 && frameVisible) {
             // white line on the very edge + black line inside it: a thin bright
             // ridge for the camera, whatever the room light or the UI theme
             float h = frameWidth / 2f;
@@ -125,7 +130,7 @@ final class FingerOverlayView extends View {
             }
         }
         canvas.restore();
-        if (animate) postInvalidateOnAnimation();
+        if (animate || blink) postInvalidateOnAnimation();
     }
 
     private static float clamp(float v, float m) { return Math.max(-m, Math.min(m, v)); }

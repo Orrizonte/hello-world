@@ -412,7 +412,7 @@ public final class FingerService extends Service {
                 if (t - lmTime > 400_000_000L) lm = new ArrayList<>();
                 FrameProcessor.Result r = processor.process(argb, w, h, lm, lmTime, screenW, screenH, t);
                 FingerOverlayView ov = overlay;
-                if (ov != null) ov.show(new FingerOverlayView.Frame(r.contours, t, r.vx, r.vy));
+                if (ov != null) { ov.setBlink(frameOn && r.searching); ov.show(new FingerOverlayView.Frame(r.contours, t, r.vx, r.vy)); }
                 lastFrameMs = SystemClock.elapsedRealtime();
                 if (previewWanted) makePreview(decoded, r);
                 if (recordRequest || rec != null) record(jpeg, decoded, t, lm, r);

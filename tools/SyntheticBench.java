@@ -81,7 +81,8 @@ public class SyntheticBench {
         FRAME = sc.contains("frame"); SMALL = sc.contains("small"); BRIGHT = sc.contains("bright"); SPEED = sc.contains("fast") ? 3.5 : 1; SCALE = sc.contains("near") ? 1.3 : sc.contains("far") ? 0.55 : 1;
         float dim = sc.contains("dim") ? 0.55f : 0.92f;
         int[] skinRgb = sc.contains("tone") ? new int[]{125, 85, 62} : new int[]{200, 145, 120};
-        int[] scr = content(dark);
+        int[] scrOn = content(dark); boolean keepFrame = FRAME; FRAME = false; int[] scrOff = content(dark); FRAME = keepFrame;
+        int[] scr = scrOn; boolean searching = true;
         FrameProcessor fp = new FrameProcessor();
         fp.setFrameMode(FRAME);
         int[] img = new int[W * H];
@@ -89,6 +90,7 @@ public class SyntheticBench {
         long ms = 0;
         int frames = 90;
         for (int f = 0; f < frames; f++) {
+            scr = (!FRAME || !searching || (f / 4) % 2 == 0) ? scrOn : scrOff;
             float[] q = quadAt(f);
             float[] scrQ = {0, 0, SW, 0, SW, SH, 0, SH};
             Homography c2s = Homography.fromQuads(q, scrQ), s2c = Homography.fromQuads(scrQ, q);
@@ -155,6 +157,7 @@ public class SyntheticBench {
             long t0 = System.nanoTime();
             FrameProcessor.Result res = fp.process(img, W, H, hands, f * 33_333_333L, SW, SH, f * 33_333_333L);
             long dt = (System.nanoTime() - t0) / 1_000_000;
+            searching = res.searching;
             if (f > 5) ms += dt;
             if (res.quad != null) {
                 found++;

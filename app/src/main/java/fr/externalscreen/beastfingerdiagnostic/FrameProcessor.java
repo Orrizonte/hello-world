@@ -16,6 +16,7 @@ public final class FrameProcessor {
         public long timeNs;
         public boolean screenFound;
         public boolean screenHeld;
+        public boolean searching;       // overlay must blink the frame
         public float[] quad;            // camera px TL,TR,BR,BL or null
         public List<float[]> contours = Collections.emptyList(); // screen px
         public int hands;
@@ -28,6 +29,8 @@ public final class FrameProcessor {
     private final FingerSegmenter segmenter = new FingerSegmenter();
     private ScreenTracker.Quad last;
     private long lastQuadNs;
+    private ScreenTracker.Quad pending;
+    private int pendingFrames, sawOn, sawOff;
     private int[] luma;
     private final OneEuroFilter fvx = new OneEuroFilter(1.0f, 0.0f, 1.0f);
     private final OneEuroFilter fvy = new OneEuroFilter(1.0f, 0.0f, 1.0f);
@@ -39,7 +42,7 @@ public final class FrameProcessor {
     public void setFrameMode(boolean on) { if (tracker.frameMode != on) { tracker.frameMode = on; last = null; } }
 
     /** Forget the tracked screen (e.g. after the display rotated). */
-    public void resetScreen() { last = null; }
+    public void resetScreen() { last = null; pending = null; }
 
     /**
      * @param hands landmark arrays (42 floats in camera px)
@@ -64,16 +67,42 @@ public final class FrameProcessor {
             float diag = (float) Math.hypot(last.pts[4] - last.pts[0], last.pts[5] - last.pts[1]);
             if (d > 0.6f * diag && timeNs - lastQuadNs < 150_000_000L) q = null;
         }
-        if (q != null) {
+        if (last == null && tracker.frameMode) {
+            // ACQUISITION: the overlay makes the frame blink while searching.
+            // A candidate is accepted only if the frame is seen ON and OFF at
+            // its place: shelves, windows or door frames never blink.
+            if (pending != null) {
+                float sup = tracker.ringSupport(pending.pts, w, h);
+                if (sup >= 0.5f) sawOn++;
+                if (sup < 0.2f) sawOff++;
+                pendingFrames++;
+            }
+            if (q != null && (pending == null || ScreenTracker.meanCornerDistance(q.pts, pending.pts)
+                    > 0.1f * (float) Math.hypot(q.pts[4] - q.pts[0], q.pts[5] - q.pts[1]))) {
+                if (pending == null || pendingFrames > 12) { pending = q; pendingFrames = 0; sawOn = 1; sawOff = 0; }
+            } else if (q != null) {
+                pending = q; // same place, fresher corners
+            }
+            if (pending != null && pendingFrames > 24) pending = null;
+            if (pending != null && sawOn >= 2 && sawOff >= 2) {
+                last = pending; lastQuadNs = timeNs; pending = null;
+                q = last; r.screenFound = true;
+            } else {
+                q = null;
+            }
+            r.searching = last == null;
+        } else if (q != null) {
             last = q; lastQuadNs = timeNs; r.screenFound = true;
         } else if (last != null && timeNs - lastQuadNs < 350_000_000L) {
             q = last; r.screenHeld = true;
         } else {
             last = null;
+            r.searching = true;
         }
         if (q == null) {
             r.trackMs = (System.nanoTime() - t0) / 1_000_000;
-            r.diag = "écran non trouvé (" + (tracker.frameMode ? tracker.ringDiag() : "seuil " + tracker.lastThreshold() + ", zones " + tracker.lastComponents()) + ")";
+            r.searching = true;
+            r.diag = (pending != null ? "vérification du cadre clignotant (" + sawOn + "/" + sawOff + ") " : "") + "écran non trouvé (" + (tracker.frameMode ? tracker.ringDiag() : "seuil " + tracker.lastThreshold() + ", zones " + tracker.lastComponents()) + ")";
             return r;
         }
         r.quad = q.pts.clone();

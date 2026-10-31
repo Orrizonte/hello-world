@@ -37,7 +37,7 @@ import java.util.Locale;
 /** Setup checklist, start/stop, appearance settings, live camera diagnostic. */
 public final class MainActivity extends Activity {
     private static final String USB_PERMISSION = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
-    static final String VERSION = "0.9.5";
+    static final String VERSION = "0.9.6";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
     private SharedPreferences prefs;

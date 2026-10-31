@@ -58,9 +58,13 @@ public final class ScreenTracker {
     private int[] rlabels, rqueue;
     private float lastRing;
     public float lastRingSupport() { return lastRing; }
-    private float bestSeenRing; private int ringPieces, ridgePct;
+    private float bestSeenRing; private int ringPieces, ridgePct, cutByBorder;
+    public boolean lastCutByBorder() { return cutByBorder > 0; }
     /** diagnostics when the screen is not found */
-    public String ringDiag() { return String.format(java.util.Locale.US, "cadre vu %.0f%% max, %d morceaux, crêtes %d%%", 100 * bestSeenRing, ringPieces, ridgePct); }
+    public String ringDiag() {
+        return (cutByBorder > 0 ? "écran coupé par le bord de l'image caméra : remonte le téléphone dans le champ | " : "")
+            + String.format(java.util.Locale.US, "cadre vu %.0f%% max, %d morceaux, crêtes %d%%", 100 * bestSeenRing, ringPieces, ridgePct);
+    }
 
     public Quad detect(int[] luma, boolean[] skin, int w, int h, Quad prior, float expectedAspect, boolean mirrored) {
         lastMode = 0;
@@ -574,7 +578,7 @@ public final class ScreenTracker {
             boxes.add(new int[]{x0, y0, x1, y1, back});
         }
         int minSpan = Math.max(16, Math.min(sw, sh) / 10);
-        bestSeenRing = 0; ringPieces = count;
+        bestSeenRing = 0; ringPieces = count; cutByBorder = 0;
         int rc = 0; for (int i = 0; i < n; i++) if (ridgeSmall[i]) rc++;
         ridgePct = 100 * rc / Math.max(1, n);
         Quad best = null;
@@ -615,6 +619,11 @@ public final class ScreenTracker {
                 if (hullFit < 0.85f) continue;
                 for (int i = 0; i < 8; i++) quad[i] *= 2f;
                 float area = Math.abs(polyArea8(quad));
+                // a screen cut by the camera border cannot give a correct geometry
+                boolean onBorder = false;
+                for (int i = 0; i < 4; i++)
+                    if (quad[2 * i] < 4 || quad[2 * i + 1] < 4 || quad[2 * i] > w - 5 || quad[2 * i + 1] > h - 5) onBorder = true;
+                if (onBorder) { cutByBorder++; continue; }
                 if (area < (w * h) / 120f || area > w * h * 0.7f) continue;
                 float sup = ringSupport(quad, w, h);
                 if (sup > bestSeenRing) bestSeenRing = sup;
