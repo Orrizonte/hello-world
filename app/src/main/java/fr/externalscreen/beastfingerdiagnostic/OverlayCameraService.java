@@ -155,11 +155,12 @@ public final class OverlayCameraService extends Service {
                         }
                     }
                     if (tips != lastTipCount) {
+                        if(tips>0 && lastTipCount<=0)
+                            status("Doigts reconnus au-dessus de l'écran : "+tips);
                         lastTipCount=tips;
-                        if(tips>0)status("Bouts des doigts AU-DESSUS DU TÉLÉPHONE : "+tips);
                     }
                     if (count<=3 || count%60==0 || (hands>0 && count%15==0)) {
-                        status("MediaPipe image "+count+" : camera "+sourceWidth+"×"+
+                        status("Reconnaissance image "+count+" : camera "+sourceWidth+"×"
                             sourceHeight+" | mains="+hands+" | pointes="+candidates+
                             " | téléphone="+(phoneSeen?"OUI":"NON")+
                             " | objet="+phoneLabel+
@@ -242,7 +243,7 @@ public final class OverlayCameraService extends Service {
                 return START_NOT_STICKY;
             }
             starting = true;
-            getSharedPreferences("settings.v084", MODE_PRIVATE).edit().putBoolean("running", true).apply();
+            getSharedPreferences("settings.v085", MODE_PRIVATE).edit().putBoolean("running", true).apply();
             // Never add any overlay window while there are no detected tips.
             // The previous full-screen external window obscured the Beast view.
             status("Affichage protégé : écran des Beast intact, fenêtre créée uniquement sur les doigts.");
@@ -258,8 +259,9 @@ public final class OverlayCameraService extends Service {
     private void updateValues(Intent intent) {
         alpha = clamp(intent.getIntExtra(EXTRA_ALPHA, alpha), 10, 75);
         scale = clamp(intent.getIntExtra(EXTRA_SCALE, scale), 40, 180);
-        offsetX = clamp(intent.getIntExtra(EXTRA_X, offsetX), -500, 500);
-        offsetY = clamp(intent.getIntExtra(EXTRA_Y, offsetY), -500, 500);
+        // Automatic phone-relative position only; never use legacy X/Y offsets.
+        offsetX = 0;
+        offsetY = 0;
         flip = intent.getBooleanExtra(EXTRA_FLIP, flip);
         targetDisplay = clamp(intent.getIntExtra(EXTRA_TARGET, targetDisplay), 0, 1);
     }
