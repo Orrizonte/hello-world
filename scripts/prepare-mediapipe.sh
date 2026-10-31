@@ -36,24 +36,35 @@ get_maven com.google.code.findbugs jsr305 3.0.2
 get_maven org.checkerframework checker-qual 2.5.2
 get_maven com.google.errorprone error_prone_annotations 2.2.0
 get_maven com.google.j2objc j2objc-annotations 1.1
+# CRITICAL: TransportRuntime_Factory extends javax.inject.Provider.
+# Without javax.inject, Android reports NoClassDefFoundError for its Dagger Factory.
+get_maven javax.inject javax.inject 1
+get_maven org.checkerframework checker-compat-qual 2.5.5
 # Android transport classes used by MediaPipe's optional instrumentation.
 for item in transport-api:3.0.0 transport-runtime:3.1.0 transport-backend-cct:3.1.0; do
     artifact="${item%%:*}"; version="${item#*:}"
     get_google com.google.android.datatransport "$artifact" "$version" aar "$ROOT/$artifact.aar"
     unzip -p "$ROOT/$artifact.aar" classes.jar > "$ROOT/jar/$artifact.jar"
 done
-# Runtime ancillary dependencies used by the transport backend.
-for item in \
-  'com.google.android.datatransport:transport-events:3.0.0' \
-  'com.google.firebase:firebase-encoders:16.1.0' \
-  'com.google.firebase:firebase-encoders-json:17.1.0'; do
-    IFS=: read -r group artifact version <<< "$item"
-    if get_google "$group" "$artifact" "$version" aar "$ROOT/$artifact.aar"; then
-      unzip -p "$ROOT/$artifact.aar" classes.jar > "$ROOT/jar/$artifact.jar"
+# DataTransport dependencies are loaded indirectly by MediaPipe. These are JARs,
+# not AARs. Fetch explicitly so Android doesn't crash during model creation.
+for dependency in \
+  "com.google.firebase:firebase-encoders:16.1.0" \
+  "com.google.firebase:firebase-encoders-json:17.1.0" \
+  "com.google.firebase:firebase-encoders-proto:16.0.0"; do
+    IFS=: read -r group artifact version <<< "$dependency"
+    url_maven="https://repo.maven.apache.org/maven2/${group//.//}/$artifact/$version/$artifact-$version.jar"
+    url_google="https://dl.google.com/dl/android/maven2/${group//.//}/$artifact/$version/$artifact-$version.jar"
+    output="$ROOT/jar/$artifact-$version.jar"
+    if curl -fLsS --retry 2 --max-time 30 "$url_google" -o "$output"; then
+      echo "Google jar: $artifact"
+    elif curl -fLsS --retry 2 --max-time 30 "$url_maven" -o "$output"; then
+      echo "Maven jar: $artifact"
     else
-      echo "Optional transport library not downloaded: $artifact"
+      echo "Optional Firebase transport jar not available: $artifact"
+      rm -f "$output"
     fi
-done
+  done
 
 cat > "$ROOT/asset/MEDIAPIPE-LICENSE-NOTICE.txt" <<'EOF'
 MediaPipe Tasks for Android and hand_landmarker.task model.
