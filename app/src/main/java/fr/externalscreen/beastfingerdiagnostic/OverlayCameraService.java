@@ -135,6 +135,7 @@ public final class OverlayCameraService extends Service {
                 return START_NOT_STICKY;
             }
             starting = true;
+            getSharedPreferences("settings.v07", MODE_PRIVATE).edit().putBoolean("running", true).apply();
             showOverlay();
             startUsbCamera();
         } else if (ACTION_CONFIG.equals(action) && windowManager != null) {
@@ -342,6 +343,7 @@ public final class OverlayCameraService extends Service {
     @Override public void onDestroy() {
         running = false;
         starting = false;
+        getSharedPreferences("settings.v07", MODE_PRIVATE).edit().putBoolean("running", false).apply();
         hideOverlay();
         try { unregisterReceiver(receiver); } catch (RuntimeException ignored) { }
         usbWorker.execute(() -> {
