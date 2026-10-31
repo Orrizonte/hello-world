@@ -23,6 +23,7 @@ import java.util.Locale;
  */
 public final class AutoPhoneTracker implements AutoCloseable {
     private final ObjectDetector detector;
+    private final PhoneVisualTracker visualTracker = new PhoneVisualTracker();
     private RectF confirmed;
     private RectF proposed;
     private int proposedFrames;
@@ -33,6 +34,7 @@ public final class AutoPhoneTracker implements AutoCloseable {
     private int detectedObjects;
     private int consecutiveMisses;
     private volatile boolean tracking;
+    private volatile boolean visuallyTracked;
     private volatile boolean searchedLower;
 
     public AutoPhoneTracker(Context context) {
@@ -53,6 +55,7 @@ public final class AutoPhoneTracker implements AutoCloseable {
         frameNumber++;
         long now=SystemClock.elapsedRealtime();
         searchedLower=false;
+        visuallyTracked=false;
         ObjectDetectorResult full=detector.detect(new BitmapImageBuilder(camera).build());
         detectedObjects=full.detections().size();
         PhoneCandidate candidate=selectBest(full,camera.getWidth(),camera.getHeight(),0,confirmed);
@@ -116,18 +119,27 @@ public final class AutoPhoneTracker implements AutoCloseable {
                 lastConfidence=candidate.confidence;
                 lastLabel=candidate.label;
                 tracking=true;
+                visualTracker.learn(camera,confirmed);
                 return new RectF(confirmed);
             }
         }
 
         consecutiveMisses++;
-        if(confirmed!=null && now-lastConfirmedAt<=430L &&
-            consecutiveMisses<=3){
-            tracking=true; // short occlusion by the user's own fingers
-            return new RectF(confirmed);
+        // Instead of freezing the phone in space (and creating floating
+        // ghost fingers), follow its visible pixels during brief occlusion.
+        if(confirmed!=null && now-lastConfirmedAt<=950L){
+            RectF visual=visualTracker.estimate(camera);
+            if(visual!=null){
+                confirmed=new RectF(visual);
+                visuallyTracked=true;
+                tracking=true;
+                lastConfidence=Math.max(.16f,lastConfidence*.94f);
+                return new RectF(confirmed);
+            }
         }
         confirmed=null;
         tracking=false;
+        visualTracker.reset();
         lastConfidence=0f;
         lastLabel="aucun";
         if(proposedFrames>2){proposed=null;proposedFrames=0;}
@@ -195,6 +207,7 @@ public final class AutoPhoneTracker implements AutoCloseable {
     }
 
     public boolean tracking(){return tracking;}
+    public boolean visuallyTracked(){return visuallyTracked;}
     public boolean lowerCropUsed(){return searchedLower;}
     public float confidence(){return lastConfidence;}
     public String label(){return lastLabel;}
