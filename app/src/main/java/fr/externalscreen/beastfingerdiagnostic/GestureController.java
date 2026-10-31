@@ -25,8 +25,8 @@ public final class GestureController {
         public Event event = Event.NONE;
     }
 
-    /** thumb + middle pinch = back (off by default: a curled middle finger touches the thumb when pointing) */
-    public boolean backGesture = false;
+    /** thumb + middle pinch = back */
+    public boolean backGesture = true;
 
     // tunables
     public float boxLeft = 0.18f, boxRight = 0.82f, boxTop = 0.15f, boxBottom = 0.80f;
@@ -123,7 +123,7 @@ public final class GestureController {
         }
 
         // back: thumb-middle pinch (only when the index is NOT pinched)
-        if (backGesture && !pinching && seenFrames >= 8 && dist3or2(lm, 8, 4) > 0.6f) {
+        if (backGesture && !pinching && seenFrames >= 8) {
             if (!backPinch && backD < PINCH_ON) { backPinch = true; if (o.event == Event.NONE) o.event = Event.BACK; }
             else if (backPinch && backD > PINCH_OFF) backPinch = false;
         }

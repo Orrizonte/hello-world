@@ -37,7 +37,7 @@ import java.util.Locale;
 /** Setup checklist, start/stop, appearance settings, live camera diagnostic. */
 public final class MainActivity extends Activity {
     private static final String USB_PERMISSION = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
-    static final String VERSION = "0.10.1";
+    static final String VERSION = "0.10.2";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
     private SharedPreferences prefs;
@@ -168,10 +168,10 @@ public final class MainActivity extends Activity {
             + "• pincer pouce + index puis relâcher : appui (clic)\n"
             + "• pincer et garder ~0,6 s (arc jaune) : appui long (équivalent clic droit)\n"
             + "• pincer puis bouger : glisser / faire défiler\n"
-            + "• (option) pincer pouce + majeur, index tendu : retour\n"
+            + "• pincer pouce + majeur : retour\n"
             + "Le service d'accessibilité doit être actif. Après cette mise à jour, désactive-le puis réactive-le une fois "
             + "pour qu'Android lui accorde la simulation d'appuis.", 12, 0xff8fa3b8));
-        page.addView(check("Geste « retour » (pouce + majeur)", "backGesture", false));
+        page.addView(check("Geste « retour » (pouce + majeur)", "backMiddle", true));
         page.addView(slider("Sensibilité du curseur (amplitude de main nécessaire)", "sensitivity", 60, 200, 100, " %"));
 
         page.addView(section("Apparence (mode contours)"));
