@@ -20,7 +20,7 @@ public final class TipTemporalFilter {
         boolean matched;
         Track(FingertipDetector.Patch p,int sequence){
             x=p.x;y=p.y;rx=p.rx;ry=p.ry;
-            hits=1;frame=sequence;
+            hits=1;frame=sequence;matched=true;
         }
     }
 
