@@ -35,12 +35,15 @@ final class HandLandmarkTracker implements AutoCloseable {
     private long lastTsMs;
     private volatile boolean closed;
 
-    HandLandmarkTracker(Context context) {
+    final int numHands;
+
+    HandLandmarkTracker(Context context, int numHands) {
+        this.numHands = numHands;
         BaseOptions base = BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build();
         HandLandmarker.HandLandmarkerOptions options = HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(base)
             .setRunningMode(RunningMode.VIDEO)
-            .setNumHands(2)
+            .setNumHands(numHands)
             .setMinHandDetectionConfidence(0.55f)
             .setMinHandPresenceConfidence(0.55f)
             .setMinTrackingConfidence(0.45f)
@@ -58,7 +61,7 @@ final class HandLandmarkTracker implements AutoCloseable {
         if (closed || !busy.compareAndSet(false, true)) return;
         final Bitmap small;
         try {
-            int tw = Math.min(640, frame.getWidth());
+            int tw = Math.min(numHands == 1 ? 480 : 640, frame.getWidth());
             int th = Math.max(1, Math.round(frame.getHeight() * (tw / (float) frame.getWidth())));
             small = Bitmap.createScaledBitmap(frame, tw, th, true);
         } catch (RuntimeException e) {

@@ -30,21 +30,22 @@ public final class GestureController {
 
     // tunables
     public float boxLeft = 0.18f, boxRight = 0.82f, boxTop = 0.15f, boxBottom = 0.80f;
-    private static final float PINCH_ON = 0.28f, PINCH_OFF = 0.42f;
+    private static final float PINCH_ON = 0.24f, PINCH_OFF = 0.40f;
     /** pinch hold before the long press ("right click"), set from the settings slider */
     public long longPressMs = 1000;
     private static final long FREEZE_MS = 140;
     private static final float MOVE_START = 0.035f; // fraction of screen diagonal
 
-    private final OneEuroFilter fx = new OneEuroFilter(1.2f, 0.004f, 1.0f);
-    private final OneEuroFilter fy = new OneEuroFilter(1.2f, 0.004f, 1.0f);
+    private final OneEuroFilter fx = new OneEuroFilter(0.7f, 0.006f, 1.0f);
+    private final OneEuroFilter fy = new OneEuroFilter(0.7f, 0.006f, 1.0f);
+    private float holdX = Float.NaN, holdY;
     private boolean pinching, dragging, longFired, backPinch;
     private long pinchStartMs, lastSeenMs;
     private float pinchX, pinchY;
     private int lostFrames, seenFrames, pinchVotes, releaseVotes;
 
     public void reset() {
-        fx.reset(); fy.reset();
+        fx.reset(); fy.reset(); holdX = Float.NaN;
         seenFrames = 0; pinchVotes = 0; releaseVotes = 0;
         pinching = dragging = longFired = backPinch = false;
     }
@@ -92,6 +93,16 @@ public final class GestureController {
         u = Math.max(0, Math.min(1, u)); v = Math.max(0, Math.min(1, v));
         long ns = nowMs * 1_000_000L;
         float cx = fx.filter(u * sw, ns), cy = fy.filter(v * sh, ns);
+        // dead zone: tiny tremor (< 0.6 % of the screen) does not move the cursor
+        float dz = 0.006f * (float) Math.hypot(sw, sh);
+        if (Float.isNaN(holdX) || Math.hypot(cx - holdX, cy - holdY) > dz) {
+            if (!Float.isNaN(holdX)) {
+                // follow, but keep the dead-zone lag out of fast moves
+                float dd = (float) Math.hypot(cx - holdX, cy - holdY);
+                holdX = cx - (cx - holdX) * dz / dd; holdY = cy - (cy - holdY) * dz / dd;
+            } else { holdX = cx; holdY = cy; }
+        }
+        cx = holdX; cy = holdY;
 
         boolean wasPinching = pinching;
         // debounce: 2 consecutive frames to start, 2 to release; nothing during
@@ -120,7 +131,7 @@ public final class GestureController {
             if (!dragging && !longFired) o.holdProgress = Math.min(1f, (nowMs - pinchStartMs) / (float) longPressMs);
         } else if (wasPinching) {
             if (dragging) o.event = Event.DRAG_END;
-            else if (!longFired) o.event = Event.TAP;
+            else if (!longFired) { o.event = Event.TAP; o.x = pinchX; o.y = pinchY; } // where the pinch began
             dragging = false;
         }
 
@@ -131,7 +142,7 @@ public final class GestureController {
         }
 
         o.visible = true;
-        if (o.event != Event.DRAG_START) { o.x = cx; o.y = cy; }
+        if (o.event != Event.DRAG_START && o.event != Event.TAP) { o.x = cx; o.y = cy; }
         o.pinch = Math.max(0f, Math.min(1f, (PINCH_OFF + 0.15f - pinchD) / (PINCH_OFF + 0.15f - PINCH_ON)));
         o.pinching = pinching;
         o.dragging = dragging;

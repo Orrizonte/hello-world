@@ -365,7 +365,7 @@ public final class FingerService extends Service {
     private void processLoop() {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
         try {
-            hands = new HandLandmarkTracker(this);
+            hands = new HandLandmarkTracker(this, gestureMode ? 1 : 2);
         } catch (Throwable t) {
             handsError = t.toString();
             status("MediaPipe indisponible (" + handsError + ") : suivi par couleur/fond seulement.");
@@ -418,6 +418,11 @@ public final class FingerService extends Service {
                     decoded.setPixels(argb, 0, w, 0, 0, w, h);
                 }
                 if (++geometryCounter % 15 == 1) updateScreenGeometry();
+                if (hands != null && hands.numHands != (gestureMode ? 1 : 2)) {
+                    // gesture mode tracks one hand only: about twice as fast
+                    hands.close();
+                    try { hands = new HandLandmarkTracker(this, gestureMode ? 1 : 2); } catch (Throwable e) { hands = null; }
+                }
                 if (hands != null) hands.submit(decoded, w, h, t);
                 List<float[]> lm = hands != null ? hands.latest() : new ArrayList<>();
                 long lmTime = hands != null ? hands.latestTimeNs() : 0;
@@ -561,7 +566,7 @@ public final class FingerService extends Service {
             recMeta.append(name).append(" t=").append(t).append(" hands=").append(lm.size());
             for (float[] h : lm) {
                 recMeta.append(" [");
-                for (int i = 0; i < h.length; i++) recMeta.append(i == 0 ? "" : ",").append(String.format(Locale.US, "%.1f", h[i]));
+                for (int i = 0; i < h.length; i++) recMeta.append(i == 0 ? "" : ",").append(String.format(Locale.US, i < 42 ? "%.1f" : "%.4f", h[i]));
                 recMeta.append(']');
             }
             if (r.quad != null) {
