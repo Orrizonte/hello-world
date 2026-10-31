@@ -23,8 +23,11 @@ jobs:
           gradle-version: '8.9'
       - name: Install native tools
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+          SDK_ROOT="/usr/local/lib/android/sdk"
+          SDK_MANAGER="$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"
+          test -x "$SDK_MANAGER"
+          yes | "$SDK_MANAGER" --licenses >/dev/null || true
+          "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Download Viture Android SDK for private build
         run: |
           python3 - <<'PY'
