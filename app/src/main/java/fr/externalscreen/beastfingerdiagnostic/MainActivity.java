@@ -5,6 +5,8 @@ import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.hardware.usb.*;
 import android.net.Uri;
 import android.os.*;
@@ -36,6 +38,16 @@ public final class MainActivity extends Activity {
                 report(intent.getStringExtra(OverlayCameraService.EXTRA_MESSAGE));
         }
     };
+    private final BroadcastReceiver calibrationReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context ctx, Intent intent) {
+            byte[] jpeg = intent.getByteArrayExtra("jpeg");
+            if (jpeg == null || jpeg.length == 0) { report("Image calibration vide."); return; }
+            Bitmap snapshot = BitmapFactory.decodeByteArray(jpeg,0,jpeg.length);
+            if(snapshot == null) {report("Image de calibrage non décodable.");return;}
+            showCalibration(snapshot);
+        }
+    };
+    private boolean calibrationReceiverRegistered;
     private boolean initialized;
     private int alpha, scale, posX, posY, target;
     private boolean mirror;
@@ -79,6 +91,12 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33)
             registerReceiver(statusReceiver, statusIntent, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(statusReceiver, statusIntent);
+        IntentFilter calibrationFilter =
+            new IntentFilter(OverlayCameraService.ACTION_CALIBRATION_FRAME);
+        if (Build.VERSION.SDK_INT >= 33)
+            registerReceiver(calibrationReceiver, calibrationFilter, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(calibrationReceiver, calibrationFilter);
+        calibrationReceiverRegistered = true;
         receiversRegistered = true;
         initialized = true;
         showSettings();
@@ -100,15 +118,14 @@ public final class MainActivity extends Activity {
         setContentView(scroller);
 
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.7");
+        title.setText("BEAST FINGERCAM  v0.8");
         title.setTextSize(23);
         title.setTextColor(0xffffffff);
         page.addView(title);
 
         TextView introduction = new TextView(this);
-        introduction.setText("Caméra Viture en surimpression transparente. " +
-            "Commence par Téléphone (miroir) ; si l'image n'apparaît pas sur les lunettes, " +
-            "essaie Beast (écran externe).");
+        introduction.setText("Bouts des doigts UNIQUEMENT, sans fond ni mains complètes. " +
+            "Calibrage de la zone de l'écran physique indispensable avant affichage.");
         introduction.setTextSize(14);
         introduction.setTextColor(0xffb8d4ee);
         page.addView(introduction);
@@ -127,6 +144,26 @@ public final class MainActivity extends Activity {
         stop.setText("ARRÊTER");
         buttons.addView(stop, new LinearLayout.LayoutParams(0, dp(52), 1));
         stop.setOnClickListener(v -> stopOverlay());
+
+        Button calibrate = new Button(this);
+        calibrate.setText("CALIBRER L'ÉCRAN DU TÉLÉPHONE");
+        page.addView(calibrate);
+        calibrate.setOnClickListener(v -> {
+            if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("running", false)) {
+                report("Appuie d'abord sur DÉMARRER puis sur CALIBRER.");
+                return;
+            }
+            report("Capture locale de calibration demandée.");
+            try {
+                startService(new Intent(this, OverlayCameraService.class)
+                    .setAction(OverlayCameraService.ACTION_SNAPSHOT));
+            } catch (RuntimeException e) { report("Calibration : " + e); }
+        });
+        TextView calibrationHelp = label(
+            "Après le démarrage, regarde le téléphone en le laissant visible " +
+            "depuis les lunettes. Sur la photo, touche les quatre coins de sa VITRE " +
+            "dans l'ordre : haut gauche, haut droit, bas droit, bas gauche.");
+        page.addView(calibrationHelp);
 
         TextView modeTitle = label("Afficher la surimpression sur");
         page.addView(modeTitle);
@@ -175,14 +212,14 @@ public final class MainActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("MODE D'EMPLOI\n" +
-            "1. Branche les Beast puis appuie sur DÉMARRER.\n" +
-            "2. Accepte les autorisations de superposition, caméra et USB.\n" +
-            "3. Ouvre une application où tu peux taper avec le clavier Android natif.\n" +
-            "4. Modifie l'opacité, la taille et la position ici. La vidéo reste " +
-            "visible pendant que tu utilises d'autres applications.\n" +
-            "5. Arrête via cette page ou la notification.\n\n" +
-            "Sur certains téléphones, Android place son clavier système au-dessus " +
-            "des fenêtres flottantes : ce premier test sert aussi à le vérifier.");
+            "1. Branche les Beast. Autorise USB / caméra / surimpression puis DÉMARRER.\n" +
+            "2. Touche CALIBRER puis les quatre coins de l'écran du téléphone sur la photo.\n" +
+            "3. Ouvre le clavier Android natif. Seuls les bouts des doigts dans la zone " +
+            "de l'écran physique apparaissent en transparence.\n" +
+            "4. Si tu bouges la tête ou le téléphone, calibre à nouveau.\n" +
+            "5. ARRÊTER fonctionne aussi dans la notification.\n\n" +
+            "Caméra monoculaire : cette version estime la zone 2D et ne peut pas " +
+            "prouver un contact physique ou mesurer exactement la hauteur du doigt.");
         help.setTextColor(0xffb8cde1);
         help.setTextSize(13);
         page.addView(help);
@@ -203,6 +240,29 @@ public final class MainActivity extends Activity {
                 .setPrimaryClip(ClipData.newPlainText("Beast FingerCam v0.7", log.toString()));
             report("Diagnostic copié.");
         });
+    }
+
+    private void showCalibration(Bitmap snapshot) {
+        final android.app.Dialog[] dialogHolder = new android.app.Dialog[1];
+        PhoneCalibrationView surface = new PhoneCalibrationView(this, snapshot, pts -> {
+            android.content.SharedPreferences.Editor editor =
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+            for (int i=0;i<pts.length;i++) editor.putFloat("phone_quad_"+i,pts[i]);
+            editor.putBoolean("phone_quad_ready",true).apply();
+            report("Zone calibrée : 4 coins enregistrés. Filtrage des bouts de doigts actif.");
+            if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+        });
+        android.app.Dialog dialog = new android.app.Dialog(this);
+        dialogHolder[0] = dialog;
+        int height = getResources().getDisplayMetrics().heightPixels*4/5;
+        surface.setMinimumHeight(height);
+        dialog.setTitle("Écran physique : 4 coins à toucher");
+        dialog.setContentView(surface,new android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,height));
+        dialog.setOnDismissListener(ignored -> { if(!snapshot.isRecycled()) snapshot.recycle(); });
+        dialog.show();
+        if (dialog.getWindow()!=null) dialog.getWindow().setLayout(
+            getResources().getDisplayMetrics().widthPixels, height+dp(50));
     }
 
     private interface SliderListener { void changed(int value); }
@@ -373,6 +433,7 @@ public final class MainActivity extends Activity {
             unregisterReceiver(events);
             unregisterReceiver(statusReceiver);
         }
+        if (calibrationReceiverRegistered) unregisterReceiver(calibrationReceiver);
         super.onDestroy();
     }
 }
