@@ -37,7 +37,7 @@ import java.util.Locale;
 /** Setup checklist, start/stop, appearance settings, live camera diagnostic. */
 public final class MainActivity extends Activity {
     private static final String USB_PERMISSION = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
-    static final String VERSION = "0.10.2";
+    static final String VERSION = "0.10.3";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
     private SharedPreferences prefs;
@@ -166,12 +166,13 @@ public final class MainActivity extends Activity {
         page.addView(text("GESTES — lève une main devant toi, dans le champ de la caméra :\n"
             + "• déplacer la main : le curseur suit (repère = base de l'index)\n"
             + "• pincer pouce + index puis relâcher : appui (clic)\n"
-            + "• pincer et garder ~0,6 s (arc jaune) : appui long (équivalent clic droit)\n"
+            + "• pincer et garder (arc jaune, durée réglable ci-dessous) : appui long (équivalent clic droit)\n"
             + "• pincer puis bouger : glisser / faire défiler\n"
             + "• pincer pouce + majeur : retour\n"
             + "Le service d'accessibilité doit être actif. Après cette mise à jour, désactive-le puis réactive-le une fois "
             + "pour qu'Android lui accorde la simulation d'appuis.", 12, 0xff8fa3b8));
         page.addView(check("Geste « retour » (pouce + majeur)", "backMiddle", true));
+        page.addView(slider("Durée du pincement pour l'appui long (clic droit)", "longPressMs", 400, 3000, 1000, " ms"));
         page.addView(slider("Sensibilité du curseur (amplitude de main nécessaire)", "sensitivity", 60, 200, 100, " %"));
 
         page.addView(section("Apparence (mode contours)"));

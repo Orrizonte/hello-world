@@ -215,6 +215,7 @@ public final class FingerService extends Service {
         mirror = p.getBoolean("mirror", false);
         gestureMode = "gestures".equals(p.getString("mode", "outlines"));
         gestures.backGesture = p.getBoolean("backMiddle", true);
+        gestures.longPressMs = p.getInt("longPressMs", 1000);
         float sens = p.getInt("sensitivity", 100) / 100f; // bigger = smaller hand box
         float half = 0.32f / sens;
         gestures.boxLeft = 0.5f - half; gestures.boxRight = 0.5f + half;

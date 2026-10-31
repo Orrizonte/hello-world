@@ -31,7 +31,9 @@ public final class GestureController {
     // tunables
     public float boxLeft = 0.18f, boxRight = 0.82f, boxTop = 0.15f, boxBottom = 0.80f;
     private static final float PINCH_ON = 0.28f, PINCH_OFF = 0.42f;
-    private static final long LONG_MS = 600, FREEZE_MS = 140;
+    /** pinch hold before the long press ("right click"), set from the settings slider */
+    public long longPressMs = 1000;
+    private static final long FREEZE_MS = 140;
     private static final float MOVE_START = 0.035f; // fraction of screen diagonal
 
     private final OneEuroFilter fx = new OneEuroFilter(1.2f, 0.004f, 1.0f);
@@ -112,13 +114,13 @@ public final class GestureController {
                 o.x = pinchX; o.y = pinchY; // drag starts where the pinch began
             } else if (dragging) {
                 o.event = Event.DRAG_MOVE;
-            } else if (!longFired && nowMs - pinchStartMs >= LONG_MS) {
+            } else if (!longFired && nowMs - pinchStartMs >= longPressMs) {
                 longFired = true; o.event = Event.LONG_PRESS;
             }
-            if (!dragging && !longFired) o.holdProgress = Math.min(1f, (nowMs - pinchStartMs) / (float) LONG_MS);
+            if (!dragging && !longFired) o.holdProgress = Math.min(1f, (nowMs - pinchStartMs) / (float) longPressMs);
         } else if (wasPinching) {
             if (dragging) o.event = Event.DRAG_END;
-            else if (!longFired && nowMs - pinchStartMs <= 700) o.event = Event.TAP;
+            else if (!longFired) o.event = Event.TAP;
             dragging = false;
         }
 
