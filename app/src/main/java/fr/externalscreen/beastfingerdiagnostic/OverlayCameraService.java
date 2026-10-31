@@ -107,6 +107,7 @@ public final class OverlayCameraService extends Service {
                 java.util.List<FingertipDetector.Patch> patches =
                     detector == null ? java.util.Collections.emptyList() : detector.process(bitmap);
                 int tips=patches.size();
+                final int sourceWidth=bitmap.getWidth(),sourceHeight=bitmap.getHeight();
                 main.post(() -> {
                     if (!running || tipsView == null) {
                         for (FingertipDetector.Patch tip:patches)tip.release();
@@ -119,7 +120,7 @@ public final class OverlayCameraService extends Service {
                     }
                     if (count <= 3 || count % 120 == 0) {
                         status("MediaPipe : image " + count + " / source " +
-                            1920 + "×" + 1080 + " / " + tips +
+                            sourceWidth + "×" + sourceHeight + " / " + tips +
                             " bouts de doigts détectés sur l'écran");
                     }
                 });
