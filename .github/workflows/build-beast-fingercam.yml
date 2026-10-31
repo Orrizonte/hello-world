@@ -25,6 +25,24 @@ jobs:
         run: |
           SDK_MANAGER="/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager"
           "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: Inspect MediaPipe offline runtime dependencies
+        run: |
+          set -eux
+          mkdir -p /tmp/mediapipe
+          for version in 0.10.32 1.1.1; do
+            for artifact in tasks-vision tasks-core; do
+              for ext in pom aar; do
+                url="https://dl.google.com/dl/android/maven2/com/google/mediapipe/$artifact/$version/$artifact-$version.$ext"
+                if curl -fLsS --retry 1 --max-time 25 "$url" -o "/tmp/mediapipe/$artifact-$version.$ext"; then
+                  ls -lh "/tmp/mediapipe/$artifact-$version.$ext"
+                  if [ "$ext" = pom ]; then grep -E '<artifactId>|<version>|<groupId>' "/tmp/mediapipe/$artifact-$version.$ext" | head -60; fi
+                  if [ "$ext" = aar ]; then unzip -l "/tmp/mediapipe/$artifact-$version.$ext" | tail -20; fi
+                else echo "not found: $url"; fi
+              done
+            done
+          done
+          curl -fLsS --max-time 50 "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" -o /tmp/mediapipe/hand_landmarker.task
+          ls -lh /tmp/mediapipe/hand_landmarker.task
       - name: Build Android APK without Gradle or Maven
         run: bash scripts/build-native-without-gradle.sh
       - name: Include Android C++ runtime
