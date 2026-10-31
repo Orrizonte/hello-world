@@ -50,11 +50,13 @@ public final class OverlayCameraService extends Service {
     private volatile boolean snapshotRequested;
     private String detectorError;
     private int lastTipCount = -1;
+    private int noTipFrames = 0;
+    private int currentDisplayId = -1;
     private int alpha = 65;
     private int scale = 110;
     private int offsetX = 0;
     private int offsetY = 0;
-    private int targetDisplay = 1; // prefer native-resolution Viture output
+    private int targetDisplay = 0; // safe mirrored-phone mode by default
     private boolean flip;
     private int frames;
 
@@ -78,18 +80,16 @@ public final class OverlayCameraService extends Service {
                 }
                 if (snapshotRequested) {
                     snapshotRequested = false;
-                    // Keep calibration snapshot in memory only, never save or upload.
-                    Bitmap small=Bitmap.createScaledBitmap(bitmap,1280,720,true);
-                    java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
-                    small.compress(Bitmap.CompressFormat.JPEG,65,output);
-                    if (small!=bitmap)small.recycle();
-                    byte[] jpeg=output.toByteArray();
-                    if (jpeg.length<700000) {
-                        Intent preview=new Intent(ACTION_CALIBRATION_FRAME).setPackage(getPackageName());
-                        preview.putExtra("jpeg",jpeg);
+                    try {
+                        CalibrationFrameHolder.publish(bitmap);
+                        Intent preview = new Intent(ACTION_CALIBRATION_FRAME)
+                            .setPackage(getPackageName());
                         sendBroadcast(preview);
-                        status("Image de calibration envoyée à l'application.");
-                    } else status("Image de calibration trop grande.");
+                        status("Image native de calibration : "+bitmap.getWidth()+
+                            "×"+bitmap.getHeight()+" (affichage adapté aux Beast).");
+                    } catch (Throwable e) {
+                        status("Calibration impossible : "+e);
+                    }
                 }
                 if (detector == null && detectorError == null) {
                     try {
@@ -108,20 +108,56 @@ public final class OverlayCameraService extends Service {
                     detector == null ? java.util.Collections.emptyList() : detector.process(bitmap);
                 int tips=patches.size();
                 final int sourceWidth=bitmap.getWidth(),sourceHeight=bitmap.getHeight();
+                final int hands=detector==null ? -1 : detector.lastHands();
+                final int candidates=detector==null ? 0 : detector.lastCandidates();
+                final int inside=detector==null ? 0 : detector.lastInside();
+                final boolean calibrated=detector!=null && detector.hasCalibration();
                 main.post(() -> {
-                    if (!running || tipsView == null) {
-                        for (FingertipDetector.Patch tip:patches)tip.release();
+                    if (!running) {
+                        for (FingertipDetector.Patch p:patches) p.release();
                         return;
                     }
-                    tipsView.showTips(patches);
-                    if (tips != lastTipCount && (count <= 30 || count % 8 == 0)) {
-                        lastTipCount=tips;
-                        if (tips>0)status("Bouts de doigts visibles sur l'écran : " + tips);
+                    if (tips > 0) {
+                        noTipFrames=0;
+                        if (tipsView == null) showOverlay();
+                        if (tipsView != null && windowManager!=null && overlayParams!=null) {
+                            android.graphics.Rect bounds=tipsView.bounds(patches);
+                            if (bounds!=null) {
+                                try {
+                                    overlayParams.x=bounds.left;
+                                    overlayParams.y=bounds.top;
+                                    overlayParams.width=bounds.width();
+                                    overlayParams.height=bounds.height();
+                                    tipsView.setWindowOrigin(bounds.left,bounds.top);
+                                    windowManager.updateViewLayout(tipsView,overlayParams);
+                                    tipsView.showTips(patches);
+                                } catch (RuntimeException windowError) {
+                                    status("Fenêtre doigts : "+windowError);
+                                    for(FingertipDetector.Patch p:patches)p.release();
+                                    hideOverlay();
+                                }
+                            } else {
+                                for(FingertipDetector.Patch p:patches)p.release();
+                            }
+                        } else {
+                            for(FingertipDetector.Patch p:patches)p.release();
+                        }
+                    } else {
+                        if (tipsView != null) {
+                            tipsView.clear();
+                            if (++noTipFrames>=12) hideOverlay();
+                        }
                     }
-                    if (count <= 3 || count % 120 == 0) {
-                        status("MediaPipe : image " + count + " / source " +
-                            sourceWidth + "×" + sourceHeight + " / " + tips +
-                            " bouts de doigts détectés sur l'écran");
+                    if (tips != lastTipCount) {
+                        lastTipCount=tips;
+                        if(tips>0)status("Doigts visibles dans la zone : "+tips);
+                    }
+                    if (count<=3 || count%60==0 || (hands>0 && count%15==0)) {
+                        status("MediaPipe image "+count+" : camera "+sourceWidth+"×"+
+                            sourceHeight+" | mains="+hands+" | pointes="+candidates+
+                            " | dans écran="+inside+" | visibles="+tips+
+                            " | calibré="+calibrated+
+                            " | surface "+(currentDisplayId>=0?"#"+currentDisplayId:"inactive"));
                     }
                 });
             } catch (Throwable ex) {
@@ -192,11 +228,15 @@ public final class OverlayCameraService extends Service {
                 return START_NOT_STICKY;
             }
             starting = true;
-            getSharedPreferences("settings.v081", MODE_PRIVATE).edit().putBoolean("running", true).apply();
-            showOverlay();
+            getSharedPreferences("settings.v082", MODE_PRIVATE).edit().putBoolean("running", true).apply();
+            // Never add any overlay window while there are no detected tips.
+            // The previous full-screen external window obscured the Beast view.
+            status("Affichage protégé : écran des Beast intact, fenêtre créée uniquement sur les doigts.");
             startUsbCamera();
-        } else if (ACTION_CONFIG.equals(action) && windowManager != null) {
-            updateOverlay(true);
+        } else if (ACTION_CONFIG.equals(action)) {
+            if (windowManager != null) updateOverlay(true);
+            status("Cible surcouche : "+(targetDisplay==0?
+                "téléphone en miroir (plus sûr)":"écran externe Beast")+".");
         }
         return START_NOT_STICKY;
     }
@@ -264,80 +304,79 @@ public final class OverlayCameraService extends Service {
     }
 
     private void displayOverlayOn(Display display) {
-        if (display == null) throw new IllegalStateException("Aucun écran");
-        Context displayContext = createDisplayContext(display);
-        Context windowContext = Build.VERSION.SDK_INT >= 30
+        if (display == null) throw new IllegalStateException("Aucun écran de projection");
+        Context displayContext=createDisplayContext(display);
+        Context windowContext=Build.VERSION.SDK_INT>=30
             ? displayContext.createWindowContext(
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,null)
             : displayContext;
-        windowManager = (WindowManager)windowContext.getSystemService(WINDOW_SERVICE);
-        tipsView = new FingertipOverlayView(windowContext);
-        android.graphics.Point projectedSize = new android.graphics.Point();
-        display.getRealSize(projectedSize);
-        if (projectedSize.x<100 || projectedSize.y<100)
-            throw new IllegalStateException("Dimensions d'affichage invalides");
-        // Native physical pixel coordinates of the actual Viture projection.
-        overlayParams = new WindowManager.LayoutParams(
-            projectedSize.x, projectedSize.y,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        windowManager=(WindowManager)windowContext.getSystemService(WINDOW_SERVICE);
+        tipsView=new FingertipOverlayView(windowContext);
+        android.graphics.Point projected=new android.graphics.Point();
+        display.getRealSize(projected);
+        if(projected.x<=100 || projected.y<=100)
+            throw new IllegalStateException("Dimensions d'écran invalides");
+        currentDisplayId=display.getDisplayId();
+        tipsView.setVirtualGeometry(projected.x,projected.y);
+        tipsView.setSettings(alpha,scale,offsetX,offsetY,flip);
+        if(display.getDisplayId()!=Display.DEFAULT_DISPLAY){
+            Display phone=((DisplayManager)getSystemService(DISPLAY_SERVICE))
+                .getDisplay(Display.DEFAULT_DISPLAY);
+            if(phone!=null){
+                android.graphics.Point phoneSize=new android.graphics.Point();
+                phone.getRealSize(phoneSize);
+                float aspect=phoneSize.y>0 ? phoneSize.x/(float)phoneSize.y : 1f;
+                tipsView.setProjectedPhoneAspect(aspect,true);
+                status("Écran projeté Viture : "+projected.x+"×"+projected.y+
+                    "; contenu téléphone : "+phoneSize.x+"×"+phoneSize.y+
+                    " (respect du ratio).");
+            }
+        }else{
+            status("Mode miroir sécurisé : écran source "+projected.x+"×"+
+                projected.y+"; projection des Beast conservée intacte.");
+        }
+        // Begin with ONE transparent physical pixel; size will be limited to
+        // the bounding rectangle of the detected fingertips on each frame.
+        overlayParams=new WindowManager.LayoutParams(
+            1,1,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             android.graphics.PixelFormat.TRANSLUCENT);
-        overlayParams.gravity = Gravity.TOP | Gravity.LEFT;
-        overlayParams.x = 0;
-        overlayParams.y = 0;
-        overlayParams.setTitle("Beast FingerCam — only fingertips / full projector resolution");
-        overlayParams.alpha = 0.75f;
-        tipsView.setSettings(alpha, scale, offsetX, offsetY, flip);
-        Display phone = ((DisplayManager)getSystemService(DISPLAY_SERVICE))
-            .getDisplay(Display.DEFAULT_DISPLAY);
-        if (phone!=null && display.getDisplayId()!=Display.DEFAULT_DISPLAY) {
-            android.graphics.Point phoneSize=new android.graphics.Point();
-            phone.getRealSize(phoneSize);
-            float phoneAspect=phoneSize.y>0?phoneSize.x/(float)phoneSize.y:1f;
-            tipsView.setProjectedPhoneAspect(phoneAspect,true);
-            status("Projection clavier conservant le ratio du téléphone : "+
-                phoneSize.x+"×"+phoneSize.y);
-        }
-        tipsView.addOnLayoutChangeListener((v,left,top,right,bottom,ol,ot,or_,ob)->{
-            if (right-left != or_-ol || bottom-top != ob-ot)
-                status("Surface doigts : " + (right-left) + "×" + (bottom-top) +
-                    " pixels (projection Beast " + projectedSize.x + "×" + projectedSize.y + ")");
-        });
-        windowManager.addView(tipsView, overlayParams);
-        status("Overlay DOIGTS UNIQUEMENT : écran #" + display.getDisplayId() +
-            " (" + display.getName() + "), " + projectedSize.x + "×" + projectedSize.y +
-            " pixels réels. Pas de fond vidéo.");
-        if (!getSharedPreferences(FingertipDetector.PREFS, MODE_PRIVATE)
-            .getBoolean("phone_quad_ready", false))
-            status("CALIBRAGE REQUIS : ouvre FingerCam, touche CALIBRER puis les 4 coins de l'écran.");
+        overlayParams.gravity=Gravity.TOP|Gravity.LEFT;
+        overlayParams.x=0;overlayParams.y=0;
+        overlayParams.alpha=0.72f;
+        overlayParams.setTitle("Beast FingerCam fingertip patch — small window");
+        windowManager.addView(tipsView,overlayParams);
+        status("Surcouche DOIGTS UNIQUEMENT sur #"+display.getDisplayId()+
+            " : résolution "+projected.x+"×"+projected.y+
+            "; fenêtre initiale 1×1, aucune surface noire.");
     }
 
     private void updateOverlay(boolean canSwitchDisplay) {
-        if (windowManager == null || tipsView == null || overlayParams == null) return;
-        if (canSwitchDisplay) {
-            Display desired = chooseDisplay();
-            if (desired != null && tipsView.getDisplay() != null
-                && desired.getDisplayId() != tipsView.getDisplay().getDisplayId()) {
-                showOverlay();
+        if(windowManager==null || tipsView==null || overlayParams==null)return;
+        if(canSwitchDisplay){
+            Display desired=chooseDisplay();
+            if(desired!=null && desired.getDisplayId()!=currentDisplayId){
+                hideOverlay();
+                // Recreated only if fingertips still exist in the next frame.
                 return;
             }
         }
-        tipsView.setSettings(alpha, scale, offsetX, offsetY, flip);
+        tipsView.setSettings(alpha,scale,offsetX,offsetY,flip);
     }
 
-    private void hideOverlay() {
-        if (windowManager != null && tipsView != null) {
-            try { windowManager.removeViewImmediate(tipsView); }
-            catch (RuntimeException ignored) { }
+    private void hideOverlay(){
+        if(windowManager!=null && tipsView!=null){
+            try{windowManager.removeViewImmediate(tipsView);}
+            catch(RuntimeException ignored){}
         }
-        if (tipsView != null) tipsView.clear();
-        tipsView = null;
-        windowManager = null;
-        overlayParams = null;
+        if(tipsView!=null)tipsView.clear();
+        tipsView=null;
+        windowManager=null;
+        overlayParams=null;
+        currentDisplayId=-1;
     }
 
     private void startUsbCamera() {
@@ -397,7 +436,7 @@ public final class OverlayCameraService extends Service {
     @Override public void onDestroy() {
         running = false;
         starting = false;
-        getSharedPreferences("settings.v07", MODE_PRIVATE).edit().putBoolean("running", false).apply();
+        getSharedPreferences("settings.v082", MODE_PRIVATE).edit().putBoolean("running", false).apply();
         hideOverlay();
         try { unregisterReceiver(receiver); } catch (RuntimeException ignored) { }
         usbWorker.execute(() -> {
