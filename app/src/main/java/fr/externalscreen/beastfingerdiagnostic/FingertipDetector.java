@@ -2,7 +2,6 @@ package fr.externalscreen.beastfingerdiagnostic;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -22,145 +21,148 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Detects ONLY fingertips and extracts tiny real-image patches centered there.
- * Every fingertip is rejected unless projected into the calibrated phone screen
- * quadrilateral. No input gestures, entire hands, or video are sent to the
- * overlay. Detection is strictly on-device using the offline MediaPipe model.
- *
- * Phone screen position is initially unknown: until the user calibrates four
- * corners, the overlay stays empty by design (no erroneous fingertip positions).
+ * The only rendered content is real-camera image of the 5 fingertips when they
+ * project INTO the phone's automatically recognized screen region.
+ * Two independent offline MediaPipe tasks run on the same reduced camera frame:
+ * ObjectDetector -> phone position; HandLandmarker -> finger-tip positions.
+ * Camera coordinates are mapped relative to the CURRENT phone location, so
+ * head motion never invalidates a saved calibration.
  */
 public final class FingertipDetector implements AutoCloseable {
-    public static final String PREFS = "settings.v082";
-    private final HandLandmarker model;
+    private final HandLandmarker handLandmarker;
+    private final AutoPhoneTracker phoneTracker;
     private final Context context;
-    public static final int[] TIPS = {4, 8, 12, 16, 20};
-    public static final int[] NEAR_TIPS = {3, 7, 11, 15, 19};
-    private static final int DETECT_WIDTH = 640;
+    public static final int[] TIPS={4,8,12,16,20};
+    public static final int[] NEAR_TIPS={3,7,11,15,19};
+    private static final int DETECT_WIDTH=640;
     private volatile int lastHands;
     private volatile int lastInside;
     private volatile int lastCandidates;
-    private volatile boolean lastCalibrated;
-    public int lastHands(){ return lastHands; }
-    public int lastInside(){ return lastInside; }
-    public int lastCandidates(){ return lastCandidates; }
-    public boolean hasCalibration(){ return lastCalibrated; }
+    private volatile boolean phoneVisible;
+    private volatile float lastPhoneConfidence;
+    private volatile int lastObjects;
+    private volatile String lastPhoneLabel="aucun";
+
+    public int lastHands(){return lastHands;}
+    public int lastInside(){return lastInside;}
+    public int lastCandidates(){return lastCandidates;}
+    public boolean hasCalibration(){return true;} // nothing to calibrate
+    public boolean phoneVisible(){return phoneVisible;}
+    public float phoneConfidence(){return lastPhoneConfidence;}
+    public int objectCandidates(){return lastObjects;}
+    public String phoneLabel(){return lastPhoneLabel;}
 
     public static final class Patch {
         public final Bitmap image;
-        public final float x, y, rx, ry;
-        Patch(Bitmap image, float x, float y, float rx, float ry) {
+        public final float x,y,rx,ry;
+        Patch(Bitmap image,float x,float y,float rx,float ry){
             this.image=image;this.x=x;this.y=y;this.rx=rx;this.ry=ry;
         }
-        public void release() {
-            if (!image.isRecycled()) image.recycle();
-        }
+        public void release(){if(!image.isRecycled())image.recycle();}
     }
 
-    public FingertipDetector(Context context) {
-        this.context = context.getApplicationContext();
-        BaseOptions options = BaseOptions.builder()
+    public FingertipDetector(Context context){
+        this.context=context.getApplicationContext();
+        BaseOptions model=BaseOptions.builder()
             .setModelAssetPath("hand_landmarker.task").build();
-        HandLandmarker.HandLandmarkerOptions settings =
+        HandLandmarker.HandLandmarkerOptions opts=
             HandLandmarker.HandLandmarkerOptions.builder()
-                .setBaseOptions(options)
+                .setBaseOptions(model)
                 .setRunningMode(RunningMode.IMAGE)
                 .setNumHands(2)
-                .setMinHandDetectionConfidence(0.40f)
-                .setMinHandPresenceConfidence(0.40f)
+                .setMinHandDetectionConfidence(.40f)
+                .setMinHandPresenceConfidence(.40f)
                 .build();
-        model = HandLandmarker.createFromOptions(this.context, settings);
-    }
-
-    /** Quad ordered top-left, top-right, bottom-right, bottom-left, normalized to camera image. */
-    private float[] savedQuad() {
-        android.content.SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        if (!prefs.getBoolean("phone_quad_ready", false)) return null;
-        float[] p = new float[8];
-        for (int i=0;i<8;i++) p[i] = prefs.getFloat("phone_quad_"+i, Float.NaN);
-        for (float v : p) if (!Float.isFinite(v) || v<0 || v>1) return null;
-        return p;
-    }
-
-    /**
-     * Maps camera coordinates to physical phone screen coordinates using a
-     * projective transform. Small image patches are cut from the real fingertips,
-     * with feathered boundaries; surrounding video is never drawn.
-     */
-    public List<Patch> process(Bitmap original) {
-        if (original == null) return Collections.emptyList();
-        float[] quad=savedQuad();
-        lastCalibrated = quad != null;
-        lastInside=0;
-        lastCandidates=0;
-        int w=original.getWidth(), h=original.getHeight();
-        int newW=Math.min(DETECT_WIDTH,w);
-        int newH=Math.max(1,Math.round(h*newW/(float)w));
-        Bitmap input = (newW == w) ? original : Bitmap.createScaledBitmap(original,newW,newH,true);
-        HandLandmarkerResult result;
+        HandLandmarker hands=HandLandmarker.createFromOptions(this.context,opts);
         try {
-            result=model.detect(new BitmapImageBuilder(input).build());
-        } finally {
-            if (input != original) input.recycle();
+            phoneTracker=new AutoPhoneTracker(this.context);
+        } catch(Throwable error){
+            hands.close();
+            throw error;
         }
-        lastHands = result.landmarks().size();
-        // Evaluate the landmark detector even before phone calibration, so
-        // diagnostic can distinguish "no hand found" from "outside phone zone".
-        if (quad == null) return Collections.emptyList();
-        float[] dst={0,0, 1,0, 1,1, 0,1};
-        Matrix transform=new Matrix();
-        // This is a full homography: the camera can see the phone at an angle.
-        if (!transform.setPolyToPoly(quad,0,dst,0,4)) return Collections.emptyList();
-        float quadWidth=(float)Math.hypot(quad[2]-quad[0],quad[3]-quad[1]);
-        float quadHeight=(float)Math.hypot(quad[6]-quad[0],quad[7]-quad[1]);
-        if (quadWidth < .05f || quadHeight < .05f) return Collections.emptyList();
+        handLandmarker=hands;
+    }
 
+    public List<Patch> process(Bitmap original) {
+        if(original==null)return Collections.emptyList();
+        int w=original.getWidth(),h=original.getHeight();
+        int resizedW=Math.min(DETECT_WIDTH,w);
+        int resizedH=Math.max(1,Math.round((float)h*resizedW/w));
+        Bitmap reduced=(resizedW==w)?original:
+            Bitmap.createScaledBitmap(original,resizedW,resizedH,true);
+        HandLandmarkerResult handResult;
+        RectF phone;
+        try {
+            // The phone is tracked in every frame, not just once.
+            phone=phoneTracker.locate(reduced);
+            handResult=handLandmarker.detect(new BitmapImageBuilder(reduced).build());
+        }finally {
+            if(reduced!=original)reduced.recycle();
+        }
+        lastHands=handResult.landmarks().size();
+        lastCandidates=0;
+        lastInside=0;
+        lastObjects=phoneTracker.candidates();
+        lastPhoneConfidence=phoneTracker.confidence();
+        lastPhoneLabel=phoneTracker.label();
+        phoneVisible=phone!=null;
+        if(phone==null)return Collections.emptyList();
+
+        RectF glass=AutoPhoneTracker.estimatedGlass(phone);
+        if(glass==null || glass.width()<.02f || glass.height()<.03f)
+            return Collections.emptyList();
         ArrayList<Patch> patches=new ArrayList<>();
-        for (List<NormalizedLandmark> hand: result.landmarks()) {
-            if (hand.size()<21) continue;
-            for (int finger=0;finger<5;finger++) {
+        for(List<NormalizedLandmark> hand:handResult.landmarks()){
+            if(hand.size()<21)continue;
+            for(int finger=0;finger<5;finger++){
                 lastCandidates++;
                 NormalizedLandmark tip=hand.get(TIPS[finger]);
                 NormalizedLandmark joint=hand.get(NEAR_TIPS[finger]);
-                float u=tip.x(), v=tip.y();
-                float[] uv={u,v};
-                transform.mapPoints(uv);
-                // Require the actual fingertip to project INSIDE the phone screen.
-                // Exclude the very edges to suppress parts of fingers outside it.
-                if (!(uv[0]>=0f && uv[0]<=1f && uv[1]>=0f && uv[1]<=1f))continue;
+                float u=tip.x(),v=tip.y();
+                // Only show projected tips WITHIN the physical phone's screen.
+                if(!glass.contains(u,v))continue;
                 lastInside++;
+                float px=(u-glass.left)/glass.width();
+                float py=(v-glass.top)/glass.height();
+
                 float distance=(float)Math.hypot((tip.x()-joint.x())*w,
-                                                (tip.y()-joint.y())*h);
-                float sourceRadius=Math.max(10f,Math.min(38f,distance*1.15f));
-                float radiusX=Math.max(.012f,Math.min(.10f,sourceRadius/(w*quadWidth)));
-                float radiusY=Math.max(.008f,Math.min(.13f,sourceRadius/(h*quadHeight)));
-                // Skip tip too close to frame edge: avoid invalid crops.
-                int cx=Math.round(u*w),cy=Math.round(v*h),r=Math.round(sourceRadius);
-                if (cx-r<0 || cy-r<0 || cx+r>=w || cy+r>=h)continue;
-                Bitmap small = Bitmap.createBitmap(original,cx-r,cy-r,2*r,2*r);
-                Bitmap feathered=feather(small);
-                small.recycle();
-                patches.add(new Patch(feathered,uv[0],uv[1],radiusX,radiusY));
+                                                 (tip.y()-joint.y())*h);
+                float radius=Math.max(9f,Math.min(30f,distance*.84f));
+                int r=Math.max(7,Math.round(radius));
+                int cx=Math.round(u*w),cy=Math.round(v*h);
+                if(cx-r<0||cy-r<0||cx+r>=w||cy+r>=h)continue;
+                // Extract ONLY a small fingertip image, never the whole hand.
+                Bitmap crop=Bitmap.createBitmap(original,cx-r,cy-r,2*r,2*r);
+                Bitmap feathered=feather(crop);
+                crop.recycle();
+                // Project pixel size relative to the current apparent size
+                // of the phone, not relative to the entire camera frame.
+                float radiusX=Math.max(.009f,Math.min(.085f,r/(w*glass.width())));
+                float radiusY=Math.max(.006f,Math.min(.11f,r/(h*glass.height())));
+                patches.add(new Patch(feathered,px,py,radiusX,radiusY));
             }
         }
         return patches;
     }
 
-    private static Bitmap feather(Bitmap raw) {
-        int w=raw.getWidth(),h=raw.getHeight();
-        Bitmap output=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
-        Canvas canvas=new Canvas(output);
+    private static Bitmap feather(Bitmap src){
+        int w=src.getWidth(),h=src.getHeight();
+        Bitmap dst=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);
+        Canvas c=new Canvas(dst);
         Paint p=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
-        canvas.drawBitmap(raw,0,0,p);
+        c.drawBitmap(src,0,0,p);
         p.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
         p.setShader(new RadialGradient(w/2f,h/2f,Math.min(w,h)/2f,
             new int[]{0xffffffff,0xffffffff,0x00ffffff},
-            new float[]{0.0f,.65f,1.0f},Shader.TileMode.CLAMP));
-        canvas.drawCircle(w/2f,h/2f,Math.min(w,h)/2f,p);
+            new float[]{0f,.52f,1f},Shader.TileMode.CLAMP));
+        c.drawCircle(w/2f,h/2f,Math.min(w,h)/2f,p);
         p.setXfermode(null);
         p.setShader(null);
-        return output;
+        return dst;
     }
 
-    @Override public void close() { model.close(); }
+    @Override public void close(){
+        phoneTracker.close();
+        handLandmarker.close();
+    }
 }
