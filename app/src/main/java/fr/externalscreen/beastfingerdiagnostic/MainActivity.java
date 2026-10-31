@@ -51,7 +51,7 @@ public final class MainActivity extends Activity {
     private boolean initialized;
     private int alpha, scale, posX, posY, target;
     private boolean mirror;
-    private static final String PREFS = "settings.v07";
+    private static final String PREFS = "settings.v081";
 
     private final BroadcastReceiver events = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
@@ -118,14 +118,15 @@ public final class MainActivity extends Activity {
         setContentView(scroller);
 
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.8");
+        title.setText("BEAST FINGERCAM  v0.8.1");
         title.setTextSize(23);
         title.setTextColor(0xffffffff);
         page.addView(title);
 
         TextView introduction = new TextView(this);
-        introduction.setText("Bouts des doigts UNIQUEMENT, sans fond ni mains complètes. " +
-            "Calibrage de la zone de l'écran physique indispensable avant affichage.");
+        introduction.setText("Bouts des doigts UNIQUEMENT, sans fond. " +
+            "Surcouche au format réel de la projection des Beast (1920×1080 si détecté). " +
+            "Calibre les quatre coins de l'écran physique du téléphone.");
         introduction.setTextSize(14);
         introduction.setTextColor(0xffb8d4ee);
         page.addView(introduction);
@@ -188,7 +189,7 @@ public final class MainActivity extends Activity {
 
         alphaSlider = addSlider(page, "OPACITÉ", 10, 75, alpha,
             value -> { alpha = value; onSettingChanged(); });
-        scaleSlider = addSlider(page, "TAILLE", 40, 140, scale,
+        scaleSlider = addSlider(page, "TAILLE DES BOUTS DE DOIGTS", 40, 180, scale,
             value -> { scale = value; onSettingChanged(); });
         xSlider = addSlider(page, "POSITION X (droite +)", -500, 500, posX,
             value -> { posX = value; onSettingChanged(); });
@@ -297,11 +298,11 @@ public final class MainActivity extends Activity {
 
     private void readSettings() {
         android.content.SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
-        alpha = p.getInt("alpha", 45);
-        scale = p.getInt("scale", 80);
+        alpha = p.getInt("alpha", 65);
+        scale = p.getInt("scale", 110);
         posX = p.getInt("x", 0);
         posY = p.getInt("y", 0);
-        target = p.getInt("target", 0);
+        target = p.getInt("target", 1);
         mirror = p.getBoolean("mirror", false);
     }
     private void onSettingChanged() {
