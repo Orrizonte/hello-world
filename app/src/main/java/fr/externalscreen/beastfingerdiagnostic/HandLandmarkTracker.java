@@ -45,8 +45,10 @@ final class HandLandmarkTracker implements AutoCloseable {
             .setRunningMode(RunningMode.VIDEO)
             .setNumHands(numHands)
             .setMinHandDetectionConfidence(0.55f)
-            .setMinHandPresenceConfidence(0.55f)
-            .setMinTrackingConfidence(0.45f)
+            // gesture mode (1 hand): once found (palm needed), keep tracking even
+            // when only the fingers stay in view
+            .setMinHandPresenceConfidence(numHands == 1 ? 0.3f : 0.55f)
+            .setMinTrackingConfidence(numHands == 1 ? 0.25f : 0.45f)
             .build();
         landmarker = HandLandmarker.createFromOptions(context.getApplicationContext(), options);
     }

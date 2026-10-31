@@ -37,7 +37,7 @@ import java.util.Locale;
 /** Setup checklist, start/stop, appearance settings, live camera diagnostic. */
 public final class MainActivity extends Activity {
     private static final String USB_PERMISSION = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
-    static final String VERSION = "0.10.4";
+    static final String VERSION = "0.10.5";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
     private SharedPreferences prefs;
@@ -163,7 +163,7 @@ public final class MainActivity extends Activity {
             pushConfig();
         });
         page.addView(modes);
-        page.addView(text("GESTES — lève une main devant toi, dans le champ de la caméra, PAUME VISIBLE (MediaPipe a besoin de voir la paume, pas seulement les doigts) :\n"
+        page.addView(text("GESTES — lève une main devant toi, dans le champ de la caméra, montre la main entière (paume) une fois pour l'accrocher, ensuite les doigts seuls suffisent :\n"
             + "• déplacer la main : le curseur suit (repère = base de l'index)\n"
             + "• pincer pouce + index puis relâcher : appui (clic)\n"
             + "• pincer et garder (arc jaune, durée réglable ci-dessous) : appui long (équivalent clic droit)\n"
