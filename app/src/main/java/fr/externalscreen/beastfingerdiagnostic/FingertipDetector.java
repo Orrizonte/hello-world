@@ -119,6 +119,7 @@ public final class FingertipDetector implements AutoCloseable {
         lastPhoneLabel=phoneTracker.label();
         phoneVisible=phone!=null;
         if(phone==null){
+            fingerSegmenter.reset();
             lastSkinPixels=0;
             lastMovingPixels=0;
             lastFallbackRegions=0;
