@@ -40,18 +40,19 @@ public final class MainActivity extends Activity {
     };
     private final BroadcastReceiver calibrationReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
-            byte[] jpeg = intent.getByteArrayExtra("jpeg");
-            if (jpeg == null || jpeg.length == 0) { report("Image calibration vide."); return; }
-            Bitmap snapshot = BitmapFactory.decodeByteArray(jpeg,0,jpeg.length);
-            if(snapshot == null) {report("Image de calibrage non décodable.");return;}
-            showCalibration(snapshot);
+            Bitmap full=CalibrationFrameHolder.peek();
+            if(full==null || full.isRecycled()){
+                report("Capture de calibration absente ; recommence.");
+                return;
+            }
+            showCalibration(full);
         }
     };
     private boolean calibrationReceiverRegistered;
     private boolean initialized;
     private int alpha, scale, posX, posY, target;
     private boolean mirror;
-    private static final String PREFS = "settings.v081";
+    private static final String PREFS = "settings.v082";
 
     private final BroadcastReceiver events = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
@@ -118,15 +119,15 @@ public final class MainActivity extends Activity {
         setContentView(scroller);
 
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.8.1");
+        title.setText("BEAST FINGERCAM  v0.8.2");
         title.setTextSize(23);
         title.setTextColor(0xffffffff);
         page.addView(title);
 
         TextView introduction = new TextView(this);
-        introduction.setText("Bouts des doigts UNIQUEMENT, sans fond. " +
-            "Surcouche au format réel de la projection des Beast (1920×1080 si détecté). " +
-            "Calibre les quatre coins de l'écran physique du téléphone.");
+        introduction.setText("Affichage protégé : aucune fenêtre noire ni vidéo complète. " +
+            "La surcouche n'apparaît que si les bouts des doigts sont reconnus. " +
+            "Calibration projetée sur les Beast à leur résolution réelle.");
         introduction.setTextSize(14);
         introduction.setTextColor(0xffb8d4ee);
         page.addView(introduction);
@@ -170,8 +171,8 @@ public final class MainActivity extends Activity {
         page.addView(modeTitle);
         screenSpinner = new Spinner(this);
         String[] modes = {
-            "Téléphone / miroir (écran #0)",
-            "VITURE Beast (écran externe)"
+            "Téléphone / mode miroir (RECOMMANDÉ)",
+            "VITURE Beast / écran externe indépendant (test)"
         };
         ArrayAdapter<String> modesAdapter = new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_dropdown_item, modes);
@@ -213,14 +214,16 @@ public final class MainActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("MODE D'EMPLOI\n" +
-            "1. Branche les Beast. Autorise USB / caméra / surimpression puis DÉMARRER.\n" +
-            "2. Touche CALIBRER puis les quatre coins de l'écran du téléphone sur la photo.\n" +
-            "3. Ouvre le clavier Android natif. Seuls les bouts des doigts dans la zone " +
-            "de l'écran physique apparaissent en transparence.\n" +
-            "4. Si tu bouges la tête ou le téléphone, calibre à nouveau.\n" +
-            "5. ARRÊTER fonctionne aussi dans la notification.\n\n" +
-            "Caméra monoculaire : cette version estime la zone 2D et ne peut pas " +
-            "prouver un contact physique ou mesurer exactement la hauteur du doigt.");
+            "1. Sélectionne Téléphone / mode miroir pour conserver le clavier projeté.\n" +
+            "2. DÉMARRER ne doit plus masquer l'écran des lunettes.\n" +
+            "3. CALIBRER : l'image de la caméra apparaît en grand sur les Beast. " +
+            "Sur le téléphone, touche les quatre coins du téléphone dans l'image. " +
+            "Pince avec deux doigts pour zoomer.\n" +
+            "4. Après le calibrage, ouvre le clavier Android natif.\n" +
+            "5. De petites zones transparentes n'apparaissent que lorsque " +
+            "des bouts de doigts sont détectés. ARRÊTER depuis la notification.\n\n" +
+            "Diagnostic : mains=0 = aucune main reconnue ; mains>0, dans écran=0 " +
+            "= problème de cadrage ou de calibrage.");
         help.setTextColor(0xffb8cde1);
         help.setTextSize(13);
         page.addView(help);
@@ -244,26 +247,80 @@ public final class MainActivity extends Activity {
     }
 
     private void showCalibration(Bitmap snapshot) {
-        final android.app.Dialog[] dialogHolder = new android.app.Dialog[1];
-        PhoneCalibrationView surface = new PhoneCalibrationView(this, snapshot, pts -> {
-            android.content.SharedPreferences.Editor editor =
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit();
-            for (int i=0;i<pts.length;i++) editor.putFloat("phone_quad_"+i,pts[i]);
-            editor.putBoolean("phone_quad_ready",true).apply();
-            report("Zone calibrée : 4 coins enregistrés. Filtrage des bouts de doigts actif.");
-            if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+        final android.app.Dialog[] controllerDialog=new android.app.Dialog[1];
+        final android.app.Presentation[] beastPresentation=new android.app.Presentation[1];
+        final PhoneCalibrationView[] beastPreview=new PhoneCalibrationView[1];
+
+        PhoneCalibrationView controller=new PhoneCalibrationView(this,snapshot,pts->{
+            android.content.SharedPreferences.Editor saved=
+                getSharedPreferences(PREFS,MODE_PRIVATE).edit();
+            for(int i=0;i<pts.length;i++)saved.putFloat("phone_quad_"+i,pts[i]);
+            saved.putBoolean("phone_quad_ready",true).apply();
+            report("Calibrage validé : quatre coins de l'écran enregistrés (source "+
+                snapshot.getWidth()+"×"+snapshot.getHeight()+").");
+            if(controllerDialog[0]!=null)controllerDialog[0].dismiss();
         });
-        android.app.Dialog dialog = new android.app.Dialog(this);
-        dialogHolder[0] = dialog;
-        int height = getResources().getDisplayMetrics().heightPixels*4/5;
-        surface.setMinimumHeight(height);
-        dialog.setTitle("Écran physique : 4 coins à toucher");
-        dialog.setContentView(surface,new android.view.ViewGroup.LayoutParams(
+        controller.setProgressListener((points,completed)->{
+            if(beastPreview[0]!=null)beastPreview[0].setPreviewPoints(points,completed);
+            report("Calibration : coin "+completed+"/4 sélectionné.");
+        });
+
+        // The phone remains the touch controller. In the glasses, show the
+        // SAME native 16:9 camera image fitted to the real external display.
+        try {
+            DisplayManager dm=(DisplayManager)getSystemService(DISPLAY_SERVICE);
+            android.view.Display external=null;
+            for(android.view.Display d:dm.getDisplays()){
+                if(d.getDisplayId()==android.view.Display.DEFAULT_DISPLAY)continue;
+                if(external==null)external=d;
+                if(d.getName().toLowerCase(java.util.Locale.ROOT).contains("viture")){
+                    external=d;break;
+                }
+            }
+            if(external!=null){
+                android.app.Presentation p=new android.app.Presentation(this,external);
+                PhoneCalibrationView projected=
+                    new PhoneCalibrationView(p.getContext(),snapshot,null);
+                p.getWindow().setFlags(
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                p.setContentView(projected);
+                p.show();
+                if(p.getWindow()!=null){
+                    p.getWindow().setLayout(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT);
+                }
+                beastPresentation[0]=p;
+                beastPreview[0]=projected;
+                android.graphics.Point screen=new android.graphics.Point();
+                external.getRealSize(screen);
+                report("CALIBRAGE PROJETÉ SUR BEAST : sortie "+screen.x+"×"+
+                    screen.y+" ; source caméra "+snapshot.getWidth()+"×"+
+                    snapshot.getHeight()+" (pas de réduction).");
+            }else report("Pas d'écran externe : calibration sur téléphone.");
+        }catch(RuntimeException error){
+            report("Présentation sur Beast indisponible : "+error+
+                ". Calibrage possible sur le téléphone.");
+        }
+
+        android.app.Dialog dialog=new android.app.Dialog(this);
+        controllerDialog[0]=dialog;
+        int width=getResources().getDisplayMetrics().widthPixels;
+        int height=getResources().getDisplayMetrics().heightPixels*9/10;
+        controller.setMinimumHeight(height);
+        dialog.setTitle("Calibrer la zone du téléphone — 4 coins");
+        dialog.setContentView(controller,new android.view.ViewGroup.LayoutParams(
             android.view.ViewGroup.LayoutParams.MATCH_PARENT,height));
-        dialog.setOnDismissListener(ignored -> { if(!snapshot.isRecycled()) snapshot.recycle(); });
+        dialog.setOnDismissListener(ignored->{
+            if(beastPresentation[0]!=null){
+                try{beastPresentation[0].dismiss();}catch(RuntimeException ignored2){}
+            }
+            CalibrationFrameHolder.clear(snapshot);
+            report("Calibrage fermé : retour à la projection normale.");
+        });
         dialog.show();
-        if (dialog.getWindow()!=null) dialog.getWindow().setLayout(
-            getResources().getDisplayMetrics().widthPixels, height+dp(50));
+        if(dialog.getWindow()!=null)dialog.getWindow().setLayout(width,height+dp(45));
     }
 
     private interface SliderListener { void changed(int value); }
@@ -302,7 +359,7 @@ public final class MainActivity extends Activity {
         scale = p.getInt("scale", 110);
         posX = p.getInt("x", 0);
         posY = p.getInt("y", 0);
-        target = p.getInt("target", 1);
+        target = p.getInt("target", 0);
         mirror = p.getBoolean("mirror", false);
     }
     private void onSettingChanged() {
