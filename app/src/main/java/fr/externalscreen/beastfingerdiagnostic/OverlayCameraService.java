@@ -57,7 +57,9 @@ public final class OverlayCameraService extends Service {
         int count = ++frames;
         decodeWorker.execute(() -> {
             try {
-                Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inSampleSize = 2; // 960x540 preview to keep Android responsive
+                Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
                 if (bitmap == null) {
                     if (count <= 3) status("JPEG reçu mais impossible à décoder");
                     return;
@@ -70,7 +72,9 @@ public final class OverlayCameraService extends Service {
                     Bitmap old = previousBitmap;
                     previousBitmap = bitmap;
                     videoView.setImageBitmap(bitmap);
-                    if (old != null && old != bitmap) old.recycle();
+                    if (old != null && old != bitmap) main.postDelayed(() -> {
+                        if (!old.isRecycled()) old.recycle();
+                    }, 350);
                     if (count <= 3 || count % 90 == 0)
                         status("Flux actif : image " + count + " / " +
                             bitmap.getWidth() + "×" + bitmap.getHeight());
@@ -128,7 +132,7 @@ public final class OverlayCameraService extends Service {
             }
             try {
                 startForeground(NOTIFICATION_ID, buildNotification(),
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA);
             } catch (RuntimeException e) {
                 status("Service premier plan impossible : " + e);
                 stopSelf();
