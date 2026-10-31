@@ -36,7 +36,7 @@ echo "=== package manifest using aapt2 ==="
     -I "$ANDROID_JAR" \
     --manifest "$OUT/AndroidManifest.xml" \
     --min-sdk-version 26 --target-sdk-version 35 \
-    --version-code 9 --version-name 0.8.1 \
+    --version-code 10 --version-name 0.8.2 \
     -o "$OUT/apk/app-debug.apk"
 python3 - "$OUT" <<'PY'
 import sys, pathlib,zipfile
