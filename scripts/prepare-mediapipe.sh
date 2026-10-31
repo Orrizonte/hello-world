@@ -50,7 +50,6 @@ done
 # not AARs. Fetch explicitly so Android doesn't crash during model creation.
 for dependency in \
   "com.google.firebase:firebase-encoders:16.1.0" \
-  "com.google.firebase:firebase-encoders-json:17.1.0" \
   "com.google.firebase:firebase-encoders-proto:16.0.0"; do
     IFS=: read -r group artifact version <<< "$dependency"
     url_maven="https://repo.maven.apache.org/maven2/${group//.//}/$artifact/$version/$artifact-$version.jar"
@@ -64,6 +63,28 @@ for dependency in \
       echo "Optional Firebase transport jar not available: $artifact"
       rm -f "$output"
     fi
+  done
+
+# Firebase JSON encoders are packaged as Android AARs, not JARs.
+get_google com.google.firebase firebase-encoders-json 17.1.0 aar "$ROOT/firebase-encoders-json.aar"
+unzip -p "$ROOT/firebase-encoders-json.aar" classes.jar > "$ROOT/jar/firebase-encoders-json.jar"
+# Prove core classes really exist before compiling, not merely referenced.
+for check in \
+  "javax/inject/Provider.class" \
+  "com/google/firebase/encoders/DataEncoder.class" \
+  "com/google/firebase/encoders/json/JsonDataEncoderBuilder.class" \
+  "com/google/firebase/encoders/proto/ProtobufEncoder.class"; do
+    found=false
+    for jarfile in "$ROOT"/jar/*.jar; do
+      if unzip -l "$jarfile" "$check" 2>/dev/null | grep -q "$check"; then
+        found=true; break
+      fi
+    done
+    if [ "$found" != true ]; then
+      echo "MISSING runtime class: $check" >&2
+      exit 17
+    fi
+    echo "Verified bundled: $check"
   done
 
 cat > "$ROOT/asset/MEDIAPIPE-LICENSE-NOTICE.txt" <<'EOF'
