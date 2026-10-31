@@ -16,11 +16,17 @@ echo "=== dex Java classes ==="
 find "$OUT/classes" -type f -name '*.class' -print0 | \
     xargs -0 "$BUILD_TOOLS/d8" --min-api 26 --lib "$ANDROID_JAR" --output "$OUT/dex"
 echo "=== compile JNI C++ using NDK Clang, no vendor binary ==="
-"$CLANG" -std=c++17 -O2 -shared -fPIC -D__ANDROID__ \
+"$CLANG" -std=c++17 -O2 -shared -fPIC -static-libstdc++ -D__ANDROID__ \
     -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
     -Wl,-z,max-page-size=16384 \
     -o "$OUT/libbeast_cam_bridge.so" \
     app/src/main/cpp/beast_cam_bridge.cpp -ldl -llog
+echo "=== verify native dependencies ==="
+readelf -d "$OUT/libbeast_cam_bridge.so" | grep NEEDED
+if readelf -d "$OUT/libbeast_cam_bridge.so" | grep -q 'libc++_shared.so'; then
+  echo "ERROR: still needs libc++_shared.so" >&2
+  exit 3
+fi
 echo "=== package manifest using aapt2 ==="
 "$BUILD_TOOLS/aapt2" link \
     -I "$ANDROID_JAR" \
