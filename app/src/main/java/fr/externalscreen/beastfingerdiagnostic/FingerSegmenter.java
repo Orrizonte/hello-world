@@ -36,7 +36,8 @@ public final class FingerSegmenter {
     private int gw, gh, n;
     private float[] bgY, bgCb, bgCr, varY, varC;
     private boolean[] bgValid;
-    private float[] cy, ccb, ccr, prior, skin, raw, field, blur;
+    private float[] cy, ccb, ccr, prior, skin, raw, field, blur, prevY;
+    private short[] still;
     private int[] labels, queue;
     private boolean[] rejected;
     private final Contours contours = new Contours();
@@ -63,7 +64,7 @@ public final class FingerSegmenter {
         varY = new float[n]; varC = new float[n]; bgValid = new boolean[n];
         cy = new float[n]; ccb = new float[n]; ccr = new float[n];
         prior = new float[n]; skin = new float[n]; raw = new float[n];
-        field = new float[n]; blur = new float[n];
+        field = new float[n]; blur = new float[n]; prevY = new float[n]; still = new short[n];
         labels = new int[n]; queue = new int[n]; rejected = new boolean[n];
     }
 
@@ -241,6 +242,9 @@ public final class FingerSegmenter {
             float r = Math.max(2.5f, Math.max(0.5f * knuckle, 0.11f * span));
             if (!(r < 200)) continue;
             for (int[] b : BONES) {
+                // palm bones would claim the whole area under a hand holding the
+                // phone; only fingers (and the thumb chain) reach over the screen
+                if ((b[0] == 0 && b[1] != 1) || (b[0] == 5 && b[1] == 9) || (b[0] == 9 && b[1] == 13) || (b[0] == 13 && b[1] == 17)) continue;
                 float ax = g[2 * b[0]], ay = g[2 * b[0] + 1], bx = g[2 * b[1]], by = g[2 * b[1] + 1];
                 float rr = (b[0] == 0 || b[0] == 5 && b[1] == 9 || b[0] == 9 && b[1] == 13 || b[0] == 13 && b[1] == 17) ? r * 1.6f : r;
                 float inner = rr * 1.25f, outer = rr * 2.8f;
@@ -398,13 +402,20 @@ public final class FingerSegmenter {
         for (int c = 0; c < n; c++) {
             if (cy[c] < 0) continue;
             float Y = cy[c] / gain;
+            if (Math.abs(cy[c] - prevY[c]) < 6f) { if (still[c] < 1000) still[c]++; } else still[c] = 0;
+            prevY[c] = cy[c];
             float a;
             if (!bgValid[c]) {
                 // only learn cells that are clearly not hand
                 // only learn cells that are clearly not hand: outside the hand
                 // prior, or inside it but with clearly non-skin colour
                 boolean clearlyNotSkin = skin[c] < -0.45f;
-                if (shown[c] > 0.3f || skin[c] > 0.2f || (prior[c] > 0.1f && !clearlyNotSkin)) continue;
+                // inside the hand prior, also learn cells whose colour has not
+                // changed for ~2 s (dark UI under a resting hand prior: chroma is
+                // useless there, but typing fingers never stay still that long)
+                boolean longStill = still[c] > 45 && skin[c] < 0.1f;
+                if (shown[c] > 0.3f && !longStill) continue;
+                if (skin[c] > 0.2f || (prior[c] > 0.1f && !clearlyNotSkin && !longStill)) continue;
                 bgY[c] = Y; bgCb[c] = ccb[c]; bgCr[c] = ccr[c];
                 varY[c] = 100; varC[c] = 36; bgValid[c] = true;
                 continue;

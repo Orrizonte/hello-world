@@ -89,8 +89,7 @@ public final class FrameProcessor {
         float covered = 0;
         for (float[] c : r.contours) covered += Contours.area(c);
         if (Math.abs(covered) > 0.4f * screenW * screenH) {
-            r.contours = Collections.emptyList();
-            segmenter.reset();
+            r.contours = Collections.emptyList(); // hide only: the models must keep learning
         }
 
         // hand velocity in screen space (for display-side prediction)
