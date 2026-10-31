@@ -30,6 +30,12 @@ public final class MainActivity extends Activity {
     private Spinner screenSpinner;
     private CheckBox mirrorCheck;
     private boolean receiversRegistered;
+    private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (OverlayCameraService.ACTION_STATUS.equals(intent.getAction()))
+                report(intent.getStringExtra(OverlayCameraService.EXTRA_MESSAGE));
+        }
+    };
     private boolean initialized;
     private int alpha, scale, posX, posY, target;
     private boolean mirror;
@@ -71,8 +77,8 @@ public final class MainActivity extends Activity {
         else registerReceiver(events, usbIntent);
         IntentFilter statusIntent = new IntentFilter(OverlayCameraService.ACTION_STATUS);
         if (Build.VERSION.SDK_INT >= 33)
-            registerReceiver(events, statusIntent, Context.RECEIVER_NOT_EXPORTED);
-        else registerReceiver(events, statusIntent);
+            registerReceiver(statusReceiver, statusIntent, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(statusReceiver, statusIntent);
         receiversRegistered = true;
         initialized = true;
         showSettings();
@@ -247,9 +253,11 @@ public final class MainActivity extends Activity {
         showSettings();
         // Only deliver adjustments to an already-running overlay.
         // Intent with ACTION_CONFIG does not launch a new service.
-        Intent values = buildServiceIntent(OverlayCameraService.ACTION_CONFIG);
-        try { startService(values); } catch (RuntimeException e) {
-            report("Réglages non transmis : " + e.getMessage());
+        if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("running", false)) {
+            Intent values = buildServiceIntent(OverlayCameraService.ACTION_CONFIG);
+            try { startService(values); } catch (RuntimeException e) {
+                report("Réglages non transmis : " + e.getMessage());
+            }
         }
     }
     private void showSettings() {
@@ -363,7 +371,7 @@ public final class MainActivity extends Activity {
     @Override protected void onDestroy() {
         if (receiversRegistered) {
             unregisterReceiver(events);
-            unregisterReceiver(events);
+            unregisterReceiver(statusReceiver);
         }
         super.onDestroy();
     }
