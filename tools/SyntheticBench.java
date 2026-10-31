@@ -81,7 +81,6 @@ public class SyntheticBench {
         float dim = sc.contains("dim") ? 0.55f : 0.92f;
         int[] skinRgb = sc.contains("tone") ? new int[]{125, 85, 62} : new int[]{200, 145, 120};
         int[] scr = content(dark);
-        if (System.getenv("STDEBUG") != null) fr.externalscreen.beastfingerdiagnostic.One.on();
         FrameProcessor fp = new FrameProcessor();
         int[] img = new int[W * H];
         double iouSum = 0; int iouN = 0; double cornerErr = 0; int found = 0;
