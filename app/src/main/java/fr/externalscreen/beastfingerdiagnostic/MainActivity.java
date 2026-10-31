@@ -45,14 +45,14 @@ public final class MainActivity extends Activity {
                 report("Capture de calibration absente ; recommence.");
                 return;
             }
-            showCalibration(full);
+            showCameraDiagnostic(full);
         }
     };
     private boolean calibrationReceiverRegistered;
     private boolean initialized;
     private int alpha, scale, posX, posY, target;
     private boolean mirror;
-    private static final String PREFS = "settings.v083";
+    private static final String PREFS = "settings.v084";
 
     private final BroadcastReceiver events = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
@@ -119,15 +119,15 @@ public final class MainActivity extends Activity {
         setContentView(scroller);
 
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.8.3");
+        title.setText("BEAST FINGERCAM  v0.8.4");
         title.setTextSize(23);
         title.setTextColor(0xffffffff);
         page.addView(title);
 
         TextView introduction = new TextView(this);
-        introduction.setText("SEULEMENT les bouts des doigts AU-DESSUS DE TON TÉLÉPHONE. " +
-            "Détection automatique de l'écran et des doigts ; suit les mouvements de tête. " +
-            "Pas de calibrage, pas de vidéo complète.");
+        introduction.setText("UNIQUEMENT les doigts au-dessus de l'écran physique " +
+            "du téléphone. La détection directe de peau en mouvement fonctionne " +
+            "même si la paume est hors champ. Aucun calibrage.");
         introduction.setTextSize(14);
         introduction.setTextColor(0xffb8d4ee);
         page.addView(introduction);
@@ -201,23 +201,42 @@ public final class MainActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("MODE D'EMPLOI\n" +
-            "1. Branche les Beast et ouvre FingerCam.\n" +
-            "2. DÉMARRER : la surcouche reste vide tant que la caméra ne reconnaît " +
-            "pas le téléphone et ses doigts.\n" +
-            "3. Ouvre le clavier Android d'origine et tape normalement.\n" +
-            "4. Si tu bouges la tête, la zone du téléphone est recherchée " +
-            "à nouveau en temps réel : AUCUN CALIBRAGE.\n" +
-            "5. ARRÊTER depuis l'application ou la notification.\n\n" +
-            "Diagnostic : téléphone=non signifie que le téléphone n'a pas été " +
-            "reconnu dans la caméra. mains>0 indique que MediaPipe voit les mains. " +
-            "au-dessus>0 signifie que les pointes des doigts sont dans le " +
-            "rectangle de l'écran détecté.");
+            "1. Branche les Beast, puis DÉMARRER.\n" +
+            "2. Ouvre le clavier Android natif et tape normalement.\n" +
+            "3. Les doigts apparaissent uniquement lorsque le téléphone et " +
+            "leur silhouette sont visibles dans le champ de la caméra.\n" +
+            "4. Détection en temps réel, sans calibrage ni main entière à montrer.\n" +
+            "5. En cas d'écran vide, le bouton photo de DIAGNOSTIC montre " +
+            "ponctuellement ce que filme la caméra.\n\n" +
+            "Lecture du diagnostic : téléphone=OUI signifie écran localisé ; " +
+            "doigt peau>0 et peau mobile>0 indiquent des pixels candidats ; " +
+            "zones doigts>0 signifie que des fragments ont été isolés. " +
+            "Une caméra RGB ne peut pas mesurer la distance exacte à la vitre.");
         help.setTextColor(0xffb8cde1);
         help.setTextSize(13);
         page.addView(help);
 
         TextView logTitle = label("DIAGNOSTIC");
         page.addView(logTitle);
+        Button preview=new Button(this);
+        preview.setText("VÉRIFIER LE CHAMP DE LA CAMÉRA (PHOTO)");
+        page.addView(preview);
+        preview.setOnClickListener(v->{
+            if(!getSharedPreferences(PREFS,MODE_PRIVATE).getBoolean("running",false)){
+                report("Démarre d'abord la caméra.");
+                return;
+            }
+            try{
+                startService(new Intent(this,OverlayCameraService.class)
+                    .setAction(OverlayCameraService.ACTION_SNAPSHOT));
+            }catch(RuntimeException e){
+                report("Impossible de voir la caméra : "+e.getMessage());
+            }
+        });
+        TextView previewHelp=label("Ce bouton sert uniquement au diagnostic : " +
+            "photo temporaire de ce que voient les Beast. Rien n'est sauvegardé. " +
+            "Il n'affiche pas la vidéo par-dessus le clavier.");
+        page.addView(previewHelp);
         status = new TextView(this);
         status.setTextColor(0xff91f7ba);
         status.setTextSize(12);
@@ -232,6 +251,31 @@ public final class MainActivity extends Activity {
                 .setPrimaryClip(ClipData.newPlainText("Beast FingerCam v0.7", log.toString()));
             report("Diagnostic copié.");
         });
+    }
+
+    private void showCameraDiagnostic(Bitmap snapshot){
+        ImageView preview=new ImageView(this);
+        preview.setImageBitmap(snapshot);
+        preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        preview.setAdjustViewBounds(true);
+        preview.setBackgroundColor(android.graphics.Color.BLACK);
+        int height=Math.max(dp(190),getResources().getDisplayMetrics().heightPixels/2);
+        android.widget.ScrollView scroll=new android.widget.ScrollView(this);
+        scroll.addView(preview,new android.widget.ScrollView.LayoutParams(
+            android.widget.ScrollView.LayoutParams.MATCH_PARENT,height));
+        new AlertDialog.Builder(this)
+            .setTitle("Caméra des Beast — photo de diagnostic")
+            .setMessage("Vérifie si les doigts au-dessus de l'écran sont visibles " +
+                "dans cette photo. Elle n'est pas enregistrée.")
+            .setView(scroll)
+            .setPositiveButton("FERMER",(dialog,which)->{})
+            .setOnDismissListener(dialog->{
+                preview.setImageDrawable(null);
+                CalibrationFrameHolder.clear(snapshot);
+            })
+            .show();
+        report("Photo caméra affichée : "+snapshot.getWidth()+"×"+
+            snapshot.getHeight()+" (aucun calibrage nécessaire).");
     }
 
     private void showCalibration(Bitmap snapshot) {
