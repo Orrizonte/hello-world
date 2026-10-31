@@ -50,8 +50,8 @@ public final class OverlayCameraService extends Service {
     private volatile boolean snapshotRequested;
     private String detectorError;
     private int lastTipCount = -1;
-    private int alpha = 45;
-    private int scale = 80;
+    private int alpha = 65;
+    private int scale = 110;
     private int offsetX = 0;
     private int offsetY = 0;
     private int targetDisplay = 1; // prefer native-resolution Viture output
@@ -202,7 +202,7 @@ public final class OverlayCameraService extends Service {
 
     private void updateValues(Intent intent) {
         alpha = clamp(intent.getIntExtra(EXTRA_ALPHA, alpha), 10, 75);
-        scale = clamp(intent.getIntExtra(EXTRA_SCALE, scale), 40, 140);
+        scale = clamp(intent.getIntExtra(EXTRA_SCALE, scale), 40, 180);
         offsetX = clamp(intent.getIntExtra(EXTRA_X, offsetX), -500, 500);
         offsetY = clamp(intent.getIntExtra(EXTRA_Y, offsetY), -500, 500);
         flip = intent.getBooleanExtra(EXTRA_FLIP, flip);
