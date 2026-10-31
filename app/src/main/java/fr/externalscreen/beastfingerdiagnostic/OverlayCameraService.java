@@ -22,6 +22,8 @@ public final class OverlayCameraService extends Service {
     public static final String ACTION_START = "fr.externalscreen.beastfingerdiagnostic.START";
     public static final String ACTION_STOP = "fr.externalscreen.beastfingerdiagnostic.STOP";
     public static final String ACTION_CONFIG = "fr.externalscreen.beastfingerdiagnostic.CONFIG";
+    public static final String ACTION_SNAPSHOT = "fr.externalscreen.beastfingerdiagnostic.SNAPSHOT";
+    public static final String ACTION_CALIBRATION_FRAME = "fr.externalscreen.beastfingerdiagnostic.CALIBRATION_FRAME";
     public static final String ACTION_STATUS = "fr.externalscreen.beastfingerdiagnostic.STATUS";
     public static final String EXTRA_MESSAGE = "message";
     public static final String EXTRA_ALPHA = "alpha";
@@ -41,9 +43,12 @@ public final class OverlayCameraService extends Service {
     private boolean starting;
     private UsbDeviceConnection connection;
     private WindowManager windowManager;
-    private ImageView videoView;
+    private FingertipOverlayView tipsView;
     private WindowManager.LayoutParams overlayParams;
-    private Bitmap previousBitmap;
+    private FingertipDetector detector;
+    private volatile boolean snapshotRequested;
+    private String detectorError;
+    private int lastTipCount = -1;
     private int alpha = 45;
     private int scale = 80;
     private int offsetX = 0;
@@ -56,32 +61,63 @@ public final class OverlayCameraService extends Service {
         if (!running || !decodeBusy.compareAndSet(false, true)) return;
         int count = ++frames;
         decodeWorker.execute(() -> {
+            Bitmap bitmap = null;
             try {
                 BitmapFactory.Options options = new BitmapFactory.Options();
-                options.inSampleSize = 2; // 960x540 preview to keep Android responsive
-                Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+                options.inSampleSize = 2;
+                bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
                 if (bitmap == null) {
-                    if (count <= 3) status("JPEG reçu mais impossible à décoder");
+                    if (count <= 3) status("Image MJPEG non décodable");
                     return;
                 }
+                if (snapshotRequested) {
+                    snapshotRequested = false;
+                    // Keep calibration snapshot in memory only, never save or upload.
+                    Bitmap small=Bitmap.createScaledBitmap(bitmap,640,360,true);
+                    java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+                    small.compress(Bitmap.CompressFormat.JPEG,65,output);
+                    if (small!=bitmap)small.recycle();
+                    byte[] jpeg=output.toByteArray();
+                    if (jpeg.length<250000) {
+                        Intent preview=new Intent(ACTION_CALIBRATION_FRAME).setPackage(getPackageName());
+                        preview.putExtra("jpeg",jpeg);
+                        sendBroadcast(preview);
+                        status("Image de calibration envoyée à l'application.");
+                    } else status("Image de calibration trop grande.");
+                }
+                if (detector == null && detectorError == null) {
+                    try {
+                        detector = new FingertipDetector(getApplicationContext());
+                        status("MediaPipe initialisé : suivi des bouts des doigts.");
+                    } catch (Throwable e) {
+                        detectorError = e.toString();
+                        status("Erreur initialisation MediaPipe : " + detectorError);
+                    }
+                }
+                java.util.List<FingertipDetector.Patch> patches =
+                    detector == null ? java.util.Collections.emptyList() : detector.process(bitmap);
+                int tips=patches.size();
                 main.post(() -> {
-                    if (!running || videoView == null) {
-                        bitmap.recycle();
+                    if (!running || tipsView == null) {
+                        for (FingertipDetector.Patch tip:patches)tip.release();
                         return;
                     }
-                    Bitmap old = previousBitmap;
-                    previousBitmap = bitmap;
-                    videoView.setImageBitmap(bitmap);
-                    if (old != null && old != bitmap) main.postDelayed(() -> {
-                        if (!old.isRecycled()) old.recycle();
-                    }, 350);
-                    if (count <= 3 || count % 90 == 0)
-                        status("Flux actif : image " + count + " / " +
-                            bitmap.getWidth() + "×" + bitmap.getHeight());
+                    tipsView.showTips(patches);
+                    if (tips != lastTipCount && (count <= 30 || count % 8 == 0)) {
+                        lastTipCount=tips;
+                        if (tips>0)status("Bouts de doigts visibles sur l'écran : " + tips);
+                    }
+                    if (count <= 3 || count % 120 == 0) {
+                        status("MediaPipe : image " + count + " / " + tips +
+                            " bouts de doigts dans la zone du téléphone");
+                    }
                 });
-            } catch (RuntimeException ex) {
-                status("Erreur décodage : " + ex.getMessage());
+            } catch (Throwable ex) {
+                if (count <= 3 || count % 120 == 0)
+                    status("Traitement doigts : " + ex.getClass().getSimpleName() +
+                        ": " + ex.getMessage());
             } finally {
+                if (bitmap != null) bitmap.recycle();
                 decodeBusy.set(false);
             }
         });
@@ -114,6 +150,11 @@ public final class OverlayCameraService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_NOT_STICKY;
         String action = intent.getAction();
+        if (ACTION_SNAPSHOT.equals(action)) {
+            snapshotRequested = true;
+            status("Préparation de l’image pour calibrer l’écran…");
+            return START_NOT_STICKY;
+        }
         if (ACTION_STOP.equals(action)) {
             stopSelf();
             return START_NOT_STICKY;
@@ -218,74 +259,48 @@ public final class OverlayCameraService extends Service {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
             : displayContext;
         windowManager = (WindowManager)windowContext.getSystemService(WINDOW_SERVICE);
-        videoView = new ImageView(windowContext);
-        videoView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        videoView.setBackgroundColor(Color.TRANSPARENT);
-        videoView.setScaleX(flip ? -1f : 1f);
+        tipsView = new FingertipOverlayView(windowContext);
         overlayParams = new WindowManager.LayoutParams(
-            200, 120, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                 | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             android.graphics.PixelFormat.TRANSLUCENT);
-        overlayParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        overlayParams.setTitle("Beast FingerCam translucent video");
-        updateDimensions(display);
-        windowManager.addView(videoView, overlayParams);
-        status("Overlay affiché sur écran #" + display.getDisplayId() + " ("
-            + display.getName() + "). Les touches restent tactiles.");
-    }
-
-    private void updateDimensions(Display disp) {
-        if (overlayParams == null) return;
-        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
-        disp.getRealMetrics(dm);
-        int w = Math.max(1, dm.widthPixels);
-        int h = Math.max(1, dm.heightPixels);
-        int width = Math.max(160, (int)(w * (scale / 100f)));
-        int height = Math.max(90, (int)(width * 9f / 16f));
-        overlayParams.width = Math.min(width, w * 2);
-        overlayParams.height = Math.min(height, h * 2);
-        overlayParams.x = (int)(offsetX * dm.density);
-        // Positive y shifts upward because gravity is BOTTOM.
-        overlayParams.y = (int)(offsetY * dm.density);
-        // Keep the untrusted overlay's effective opacity <= 0.75 for touch passthrough.
-        overlayParams.alpha = alpha / 100f;
+        overlayParams.gravity = Gravity.TOP | Gravity.LEFT;
+        overlayParams.setTitle("Beast FingerCam — tips only");
+        overlayParams.alpha = 0.75f;
+        tipsView.setSettings(alpha, scale, offsetX, offsetY, flip);
+        windowManager.addView(tipsView, overlayParams);
+        status("Overlay DOIGTS UNIQUEMENT sur écran #" + display.getDisplayId() +
+            " (" + display.getName() + "). Aucune vidéo de fond.");
+        if (!getSharedPreferences(FingertipDetector.PREFS, MODE_PRIVATE)
+            .getBoolean("phone_quad_ready", false))
+            status("CALIBRAGE REQUIS : ouvre FingerCam, touche CALIBRER puis les 4 coins de l'écran.");
     }
 
     private void updateOverlay(boolean canSwitchDisplay) {
-        if (windowManager == null || videoView == null || overlayParams == null) return;
+        if (windowManager == null || tipsView == null || overlayParams == null) return;
         if (canSwitchDisplay) {
-            // Recreate only when display selection actually changed.
             Display desired = chooseDisplay();
-            if (desired != null && videoView.getDisplay() != null
-                && desired.getDisplayId() != videoView.getDisplay().getDisplayId()) {
+            if (desired != null && tipsView.getDisplay() != null
+                && desired.getDisplayId() != tipsView.getDisplay().getDisplayId()) {
                 showOverlay();
                 return;
             }
         }
-        Display current = videoView.getDisplay();
-        if (current != null) updateDimensions(current);
-        videoView.setScaleX(flip ? -1f : 1f);
-        try {
-            windowManager.updateViewLayout(videoView, overlayParams);
-        } catch (RuntimeException e) {
-            status("Réglages overlay : " + e);
-        }
+        tipsView.setSettings(alpha, scale, offsetX, offsetY, flip);
     }
 
     private void hideOverlay() {
-        if (windowManager != null && videoView != null) {
-            try { windowManager.removeViewImmediate(videoView); }
+        if (windowManager != null && tipsView != null) {
+            try { windowManager.removeViewImmediate(tipsView); }
             catch (RuntimeException ignored) { }
         }
-        if (videoView != null) videoView.setImageDrawable(null);
-        if (previousBitmap != null) {
-            previousBitmap.recycle();
-            previousBitmap = null;
-        }
-        videoView = null;
+        if (tipsView != null) tipsView.clear();
+        tipsView = null;
         windowManager = null;
         overlayParams = null;
     }
@@ -358,6 +373,7 @@ public final class OverlayCameraService extends Service {
             }
         });
         usbWorker.shutdown();
+        decodeWorker.execute(() -> { if (detector != null) { detector.close(); detector=null; } });
         decodeWorker.shutdown();
         super.onDestroy();
     }
