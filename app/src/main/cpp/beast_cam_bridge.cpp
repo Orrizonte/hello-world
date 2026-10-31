@@ -45,7 +45,7 @@ void frameCallback(const CameraFrame *frame, void*) {
     bool attached = false;
     jint result = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
     if (result == JNI_EDETACHED) {
-        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+        if (vm->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr) != JNI_OK) return;
         attached = true;
     } else if (result != JNI_OK) return;
     jbyteArray bytes = env->NewByteArray(static_cast<jsize>(frame->size));
