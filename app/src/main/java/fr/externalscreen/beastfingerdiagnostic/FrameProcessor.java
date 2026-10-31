@@ -73,7 +73,7 @@ public final class FrameProcessor {
         }
         if (q == null) {
             r.trackMs = (System.nanoTime() - t0) / 1_000_000;
-            r.diag = "écran non trouvé (seuil " + tracker.lastThreshold() + ", zones " + tracker.lastComponents() + ")";
+            r.diag = "écran non trouvé (" + (tracker.frameMode ? tracker.ringDiag() : "seuil " + tracker.lastThreshold() + ", zones " + tracker.lastComponents()) + ")";
             return r;
         }
         r.quad = q.pts.clone();

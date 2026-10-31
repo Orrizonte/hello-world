@@ -58,6 +58,9 @@ public final class ScreenTracker {
     private int[] rlabels, rqueue;
     private float lastRing;
     public float lastRingSupport() { return lastRing; }
+    private float bestSeenRing; private int ringPieces, ridgePct;
+    /** diagnostics when the screen is not found */
+    public String ringDiag() { return String.format(java.util.Locale.US, "cadre vu %.0f%% max, %d morceaux, crêtes %d%%", 100 * bestSeenRing, ringPieces, ridgePct); }
 
     public Quad detect(int[] luma, boolean[] skin, int w, int h, Quad prior, float expectedAspect, boolean mirrored) {
         lastMode = 0;
@@ -66,8 +69,8 @@ public final class ScreenTracker {
         if (prior != null) {
             Quad t = track(luma, w, h, prior, expectedAspect);
             if (t != null && frameMode) {
-                lastRing = ringSupport(t.pts, w, h);
-                if (lastRing < 0.45f) t = null;
+                lastRing = ringSupport(t.pts, w, h, false);
+                if (lastRing < 0.5f) t = null;
             }
             if (t != null) { lastMode = 1; return t; }
         }
@@ -460,24 +463,30 @@ public final class ScreenTracker {
     }
 
     // ------------------------------------------------------------ frame (ridge) mode
+    /**
+     * Thin bright line with darker pixels on both sides, at several scales so
+     * the frame is found whether the phone is near (thick line) or far (thin).
+     */
     private void computeRidge(int[] luma, int w, int h) {
         int n = w * h;
         if (ridge == null || ridge.length != n) ridge = new boolean[n];
-        int k = 4;
+        final int[] ks = {2, 4, 7};
         for (int y = 0; y < h; y++) {
             int row = y * w;
             for (int x = 0; x < w; x++) {
                 int i = row + x, v = luma[i];
                 boolean r = false;
-                if (v >= 70) {
-                    int t = Math.max(22, v / 6);
-                    if (y >= k && y < h - k) {
-                        int a = luma[i - k * w], b = luma[i + k * w];
-                        if (v - Math.max(a, b) > t) r = true;
-                    }
-                    if (!r && x >= k && x < w - k) {
-                        int a = luma[i - k], b = luma[i + k];
-                        if (v - Math.max(a, b) > t) r = true;
+                if (v >= 40) {
+                    int t = Math.max(16, v / 6);
+                    for (int k : ks) {
+                        if (y >= k && y < h - k) {
+                            int a = luma[i - k * w], b = luma[i + k * w];
+                            if (v - Math.max(a, b) > t) { r = true; break; }
+                        }
+                        if (x >= k && x < w - k) {
+                            int a = luma[i - k], b = luma[i + k];
+                            if (v - Math.max(a, b) > t) { r = true; break; }
+                        }
                     }
                 }
                 ridge[i] = r;
@@ -494,10 +503,14 @@ public final class ScreenTracker {
     }
 
     /** Fraction of perimeter samples with a ridge pixel within 4 px inside the side. */
-    float ringSupport(float[] q, int w, int h) {
+    float ringSupport(float[] q, int w, int h) { return ringSupport(q, w, h, true); }
+
+    /** strict=false: one side may be hidden (hand over the edge, out of view). */
+    float ringSupport(float[] q, int w, int h, boolean strict) {
         if (ridge == null) return 0;
         float cx = (q[0] + q[2] + q[4] + q[6]) / 4, cy = (q[1] + q[3] + q[5] + q[7]) / 4;
         int ok = 0, total = 0; float minSide = 1;
+        int[] sOk = new int[4], sN = new int[4];
         for (int s = 0; s < 4; s++) {
             int a = s, b = (s + 1) % 4;
             float ax = q[2 * a], ay = q[2 * a + 1], bx = q[2 * b], by = q[2 * b + 1];
@@ -505,20 +518,33 @@ public final class ScreenTracker {
             if (len < 8) return 0;
             float nx = (by - ay) / len, ny = -(bx - ax) / len;
             if (nx * ((ax + bx) / 2 - cx) + ny * ((ay + by) / 2 - cy) < 0) { nx = -nx; ny = -ny; }
-            int sideOk = 0, sideN = 24;
-            for (int k = 0; k < sideN; k++) {
-                float t = 0.06f + 0.88f * k / (sideN - 1);
+            int sideOk = 0, sideN = 0;
+            for (int k = 0; k < 24; k++) {
+                float t = 0.06f + 0.88f * k / 23f;
                 float sx = ax + (bx - ax) * t, sy = ay + (by - ay) * t;
-                for (float o = -1.5f; o <= 5.5f; o += 1f) {
+                if (sx < 2 || sy < 2 || sx > w - 3 || sy > h - 3) continue; // out of the camera view
+                sideN++;
+                for (float o = -1.5f; o <= 9.5f; o += 1f) {
                     int px = Math.round(sx - nx * o), py = Math.round(sy - ny * o);
                     if (px < 0 || py < 0 || px >= w || py >= h) continue;
                     if (ridge[py * w + px]) { sideOk++; break; }
                 }
             }
-            ok += sideOk; total += sideN;
-            minSide = Math.min(minSide, sideOk / (float) sideN);
+            sOk[s] = sideOk; sN[s] = sideN;
+        }
+        int worst = -1; float worstR = 2;
+        for (int s = 0; s < 4; s++) {
+            float r = sN[s] < 6 ? -1 : sOk[s] / (float) sN[s];
+            if (r < worstR) { worstR = r; worst = s; }
+        }
+        for (int s = 0; s < 4; s++) {
+            if (sN[s] < 6) continue; // side (almost) outside the view: judge the others
+            if (!strict && s == worst) continue;
+            ok += sOk[s]; total += sN[s];
+            minSide = Math.min(minSide, sOk[s] / (float) sN[s]);
         }
         // every side must show some of the frame (fingers hide parts of it)
+        if (total < 24) return 0;
         if (minSide < 0.2f) return Math.min(0.3f, ok / (float) total);
         return ok / (float) total;
     }
@@ -548,6 +574,9 @@ public final class ScreenTracker {
             boxes.add(new int[]{x0, y0, x1, y1, back});
         }
         int minSpan = Math.max(16, Math.min(sw, sh) / 10);
+        bestSeenRing = 0; ringPieces = count;
+        int rc = 0; for (int i = 0; i < n; i++) if (ridgeSmall[i]) rc++;
+        ridgePct = 100 * rc / Math.max(1, n);
         Quad best = null;
         for (int c = 1; c <= count; c++) {
             int[] b = boxes.get(c);
@@ -588,6 +617,7 @@ public final class ScreenTracker {
                 float area = Math.abs(polyArea8(quad));
                 if (area < (w * h) / 120f || area > w * h * 0.7f) continue;
                 float sup = ringSupport(quad, w, h);
+                if (sup > bestSeenRing) bestSeenRing = sup;
                 if (sup < 0.55f) continue;
                 orderClockwise(quad, mirrored);
                 orient(quad, prior);
@@ -631,6 +661,7 @@ public final class ScreenTracker {
             for (int k = 0; k < 16; k++) {
                 float t = 0.08f + 0.84f * k / 15f;
                 float sx = ax + (bx - ax) * t, sy = ay + (by - ay) * t;
+                if (sx < 4 || sy < 4 || sx > w - 5 || sy > h - 5) continue; // out of view
                 total++;
                 for (int o = -3; o <= 3; o++) {
                     float vin = sample(luma, w, h, sx + nx * (o - 2), sy + ny * (o - 2));
@@ -639,7 +670,7 @@ public final class ScreenTracker {
                 }
             }
         }
-        return total == 0 ? 0 : ok / (float) total;
+        return total < 20 ? 0 : ok / (float) total;
     }
 
     /**
@@ -654,6 +685,7 @@ public final class ScreenTracker {
         float diag = (float) Math.hypot(q[4] - q[0], q[5] - q[1]);
         float range = Math.max(10f, Math.min(42f, diag * 0.09f));
         float[][] lines = new float[4][];
+        int keptSides = 0, keptIndex = -1;
         for (int s = 0; s < 4; s++) {
             int a = s, b = (s + 1) % 4;
             float ax = q[2 * a], ay = q[2 * a + 1], bx = q[2 * b], by = q[2 * b + 1];
@@ -689,9 +721,21 @@ public final class ScreenTracker {
                 }
                 px[m] = sx + nx * off; py[m] = sy + ny * off; m++;
             }
-            if (m < Math.max(6, samples * 0.35f)) return null;
-            float[] line = fitLine(px, py, m);
-            if (line == null) return null;
+            int inView = 0;
+            for (int k = 0; k < samples; k++) {
+                float t = 0.06f + 0.88f * k / (samples - 1);
+                float sx = ax + (bx - ax) * t, sy = ay + (by - ay) * t;
+                if (sx >= 2 && sy >= 2 && sx <= w - 3 && sy <= h - 3) inView++;
+            }
+            // a side mostly outside the camera view is not measured (border artefacts)
+            float[] line = (inView >= samples * 0.7f && m >= Math.max(6, samples * 0.35f)) ? fitLine(px, py, m) : null;
+            if (line == null) {
+                // hidden (hand over the edge) or out of view: keep the predicted side, once
+                if (++keptSides > 1) return null;
+                keptIndex = s;
+                lines[s] = new float[]{ax, ay, dx, dy};
+                continue;
+            }
             lines[s] = line;
         }
         Quad out = new Quad();
@@ -700,15 +744,34 @@ public final class ScreenTracker {
             if (p == null) return null;
             out.pts[2 * c] = p[0]; out.pts[2 * c + 1] = p[1];
         }
+        if (keptIndex >= 0) {
+            // The hidden side moved too: rebuild its corners from the visible
+            // ones, keeping the previous side lengths scaled like the opposite side.
+            int k = keptIndex, c0 = k, c1 = (k + 1) % 4, c2 = (k + 2) % 4, c3 = (k + 3) % 4;
+            float[] o = out.pts;
+            float oppNew = (float) Math.hypot(o[2 * c2] - o[2 * c3], o[2 * c2 + 1] - o[2 * c3 + 1]);
+            float oppOld = (float) Math.hypot(q[2 * c2] - q[2 * c3], q[2 * c2 + 1] - q[2 * c3 + 1]);
+            float sc = oppOld > 1 ? oppNew / oppOld : 1;
+            for (int[] pr : new int[][]{{c0, c3}, {c1, c2}}) {
+                int hid = pr[0], vis = pr[1];
+                float lx = q[2 * hid] - q[2 * vis], ly = q[2 * hid + 1] - q[2 * vis + 1];
+                float len = (float) Math.hypot(lx, ly) * sc;
+                float ddx = o[2 * hid] - o[2 * vis], ddy = o[2 * hid + 1] - o[2 * vis + 1];
+                float dl = (float) Math.hypot(ddx, ddy);
+                if (dl < 1e-3f) return null;
+                o[2 * hid] = o[2 * vis] + ddx / dl * len;
+                o[2 * hid + 1] = o[2 * vis + 1] + ddy / dl * len;
+            }
+        }
         if (meanCornerDistance(out.pts, q) > 0.22f * diag) return null;
         float a0 = Math.abs(polyArea8(q)), a1 = Math.abs(polyArea8(out.pts));
         if (a1 < 0.6f * a0 || a1 > 1.6f * a0 || !anglesOk(out.pts)) return null;
-        for (int i = 0; i < 8; i++) if (out.pts[i] < -2 || out.pts[i] > (i % 2 == 0 ? w + 2 : h + 2)) return null;
+        for (int i = 0; i < 8; i++) if (out.pts[i] < -0.25f * w || out.pts[i] > (i % 2 == 0 ? 1.25f * w : 1.25f * h)) return null;
         out.score = prior.score;
         float asp = aspect(out.pts);
         if (asp < expectedAspect * 0.25f || asp > expectedAspect * 2.5f) return null;
         refine(out, luma, w, h);
-        if (edgeSupport(out.pts, luma, w, h) < 0.45f) return null;
+        if (!frameMode && edgeSupport(out.pts, luma, w, h) < 0.45f) return null;
         return out;
     }
 

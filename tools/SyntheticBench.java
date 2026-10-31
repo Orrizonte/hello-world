@@ -39,13 +39,13 @@ public class SyntheticBench {
         return c;
     }
 
-    static double SPEED = 1;
+    static double SPEED = 1, SCALE = 1;
     static float[] quadAt(int f) {
         double t = f / 30.0 * SPEED;
         double cx = 640 + 60 * Math.sin(t * 1.3), cy = 400 + 35 * Math.sin(t * 0.9 + 1);
         double s = 1 + 0.08 * Math.sin(t * 0.7);
         double rot = Math.toRadians(6 * Math.sin(t * 1.1));
-        double hw = (SMALL ? 80 : 118) * s, hh = (SMALL ? 150 : 215) * s, topShrink = 0.85; // perspective: top farther
+        double hw = (SMALL ? 80 : 118) * s * SCALE, hh = (SMALL ? 150 : 215) * s * SCALE, topShrink = 0.85; // perspective: top farther
         double[][] p = {{-hw * topShrink, -hh}, {hw * topShrink, -hh}, {hw, hh}, {-hw, hh}};
         float[] q = new float[8];
         for (int i = 0; i < 4; i++) {
@@ -78,7 +78,7 @@ public class SyntheticBench {
         boolean dark = sc.contains("dark");
         boolean noLm = sc.contains("nolm");
         boolean early = sc.contains("early");
-        FRAME = sc.contains("frame"); SMALL = sc.contains("small"); BRIGHT = sc.contains("bright"); SPEED = sc.contains("fast") ? 3.5 : 1;
+        FRAME = sc.contains("frame"); SMALL = sc.contains("small"); BRIGHT = sc.contains("bright"); SPEED = sc.contains("fast") ? 3.5 : 1; SCALE = sc.contains("near") ? 1.3 : sc.contains("far") ? 0.55 : 1;
         float dim = sc.contains("dim") ? 0.55f : 0.92f;
         int[] skinRgb = sc.contains("tone") ? new int[]{125, 85, 62} : new int[]{200, 145, 120};
         int[] scr = content(dark);
@@ -178,9 +178,10 @@ public class SyntheticBench {
             }
             double iou = uni == 0 ? 1 : inter / uni;
             if (handsOn && f >= (early ? 15 : 35)) { iouSum += iou; iouN++; }
+            if (System.getenv("PERF") != null) { double e=0; if (res.quad!=null) for (int i=0;i<8;i++) e=Math.max(e,Math.abs(res.quad[i]-q[i])); try { System.out.printf("F%d mode=%d err=%.1f true=%s got=%s%n", f, fr.externalscreen.beastfingerdiagnostic.N.mode(fp), e, java.util.Arrays.toString(q), res.quad==null?"-":java.util.Arrays.toString(res.quad)); } catch (Exception ex) {} }
             if (f % 10 == 0 || f == frames - 1)
                 System.out.printf("f%02d %3dms hands=%b iou=%.3f fp=%.0f | %s%n", f, dt, handsOn, iou, uni - inter, res.diag);
-            if (dump != null && (f == 2 || f == 40 || f == 80)) { dumpFrame(img, res, s, dump + "/" + sc + "_" + f); try { Class.forName("Dbg").getMethod("dump", FingerSegmenter.class, String.class).invoke(null, s, dump + "/" + sc + "_" + f + "_fields.png"); } catch (Throwable e) { } }
+            if (dump != null && (f == 2 || f == 10 || f == 40 || f == 80)) { dumpFrame(img, res, s, dump + "/" + sc + "_" + f); try { Class.forName("Dbg").getMethod("dump", FingerSegmenter.class, String.class).invoke(null, s, dump + "/" + sc + "_" + f + "_fields.png"); } catch (Throwable e) { } }
         }
         System.out.printf("SCENARIO %s: screen %d/%d, mean max-corner err %.2f px, mean IoU %.3f, %.1f ms/frame%n",
             sc, found, frames, cornerErr / Math.max(1, found), iouSum / Math.max(1, iouN), ms / (double) (frames - 6));
