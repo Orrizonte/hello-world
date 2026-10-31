@@ -161,6 +161,12 @@ public final class OverlayCameraService extends Service {
                                             stableWindow.top=Math.max(0,stableWindow.top);
                                             stableWindow.right=Math.min(projectedWidth,stableWindow.right);
                                             stableWindow.bottom=Math.min(projectedHeight,stableWindow.bottom);
+                                            // Keep the actual window small:
+                                            // a huge transparent Viture overlay
+                                            // previously hid the projected UI.
+                                            if(stableWindow.width()*stableWindow.height() >
+                                                projectedWidth*projectedHeight*.28f)
+                                                stableWindow=wanted;
                                         }
                                         overlayParams.x=stableWindow.left;
                                         overlayParams.y=stableWindow.top;
