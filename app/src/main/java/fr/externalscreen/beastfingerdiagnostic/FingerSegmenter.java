@@ -413,7 +413,9 @@ public final class FingerSegmenter {
                 // inside the hand prior, also learn cells whose colour has not
                 // changed for ~2 s (dark UI under a resting hand prior: chroma is
                 // useless there, but typing fingers never stay still that long)
-                boolean longStill = still[c] > 45 && skin[c] < 0.1f;
+                // A finger resting still must stay visible: stillness alone never
+                // turns a cell into background while a hand is near it.
+                boolean longStill = still[c] > 45 && skin[c] < 0.1f && prior[c] < 0.1f;
                 if (shown[c] > 0.3f && !longStill) continue;
                 if (skin[c] > 0.2f || (prior[c] > 0.1f && !clearlyNotSkin && !longStill)) continue;
                 bgY[c] = Y; bgCb[c] = ccb[c]; bgCr[c] = ccr[c];
