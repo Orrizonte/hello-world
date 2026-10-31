@@ -10,7 +10,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * TOUCH-THROUGH overlay that draws only small feathered fingertip patches.
+ * TOUCH-THROUGH overlay that draws only drawn fingertip contours (never camera video).
  * It uses Viture's *virtual full-display coordinate system* but is physically
  * a tightly cropped overlay window around detected tips. No full-screen
  * transparent surface is created (which made Honor's extended display go black).
@@ -18,7 +18,7 @@ import java.util.List;
 public final class FingertipOverlayView extends View {
     private List<FingertipDetector.Patch> tips=Collections.emptyList();
     private final Paint brush=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
-    private int opacity=65,patchScale=110,shiftX=0,shiftY=0;
+    private int opacity=85,patchScale=120,shiftX=0,shiftY=0;
     private boolean mirror;
     private float sourcePhoneAspect=-1f;
     private boolean preservePhoneAspect;
@@ -43,7 +43,7 @@ public final class FingertipOverlayView extends View {
         invalidate();
     }
     public void setSettings(int percent,int scale,int dx,int dy,boolean mirrored){
-        opacity=Math.max(10,Math.min(75,percent));
+        opacity=Math.max(10,Math.min(95,percent));
         patchScale=Math.max(40,Math.min(180,scale));
         shiftX=dx;shiftY=dy;mirror=mirrored;
         invalidate();
