@@ -55,7 +55,7 @@ public final class OverlayCameraService extends Service {
     private int projectedWidth=1080,projectedHeight=2420;
     private int currentDisplayId = -1;
     private int alpha = 85;
-    private int scale = 110;
+    private int scale = 120;
     private int offsetX = 0;
     private int offsetY = 0;
     private int targetDisplay = 0; // safe mirrored-phone mode by default
@@ -195,7 +195,7 @@ public final class OverlayCameraService extends Service {
                     }
                     if (tips != lastTipCount) {
                         if(tips>0 && lastTipCount<=0)
-                            status("Doigts reconnus au-dessus de l'écran : "+tips);
+                            status("Contours de doigts visibles au-dessus de l'écran : "+tips);
                         lastTipCount=tips;
                     }
                     if (count<=3 || count%60==0 || (hands>0 && count%15==0)) {
@@ -282,7 +282,7 @@ public final class OverlayCameraService extends Service {
                 return START_NOT_STICKY;
             }
             starting = true;
-            getSharedPreferences("settings.v085", MODE_PRIVATE).edit().putBoolean("running", true).apply();
+            getSharedPreferences("settings.v086", MODE_PRIVATE).edit().putBoolean("running", true).apply();
             // Never add any overlay window while there are no detected tips.
             // The previous full-screen external window obscured the Beast view.
             status("Affichage protégé : écran des Beast intact, fenêtre créée uniquement sur les doigts.");
