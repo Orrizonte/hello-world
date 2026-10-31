@@ -31,7 +31,7 @@ import java.util.List;
  * corners, the overlay stays empty by design (no erroneous fingertip positions).
  */
 public final class FingertipDetector implements AutoCloseable {
-    public static final String PREFS = "settings.v07";
+    public static final String PREFS = "settings.v081";
     private final HandLandmarker model;
     private final Context context;
     public static final int[] TIPS = {4, 8, 12, 16, 20};
