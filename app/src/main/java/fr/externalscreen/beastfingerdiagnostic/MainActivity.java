@@ -37,7 +37,7 @@ import java.util.Locale;
 /** Setup checklist, start/stop, appearance settings, live camera diagnostic. */
 public final class MainActivity extends Activity {
     private static final String USB_PERMISSION = "fr.externalscreen.beastfingerdiagnostic.USB_PERMISSION";
-    private static final String VERSION = "0.9.4";
+    static final String VERSION = "0.9.5";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
     private SharedPreferences prefs;
@@ -175,6 +175,11 @@ public final class MainActivity extends Activity {
         previewView.setBackgroundColor(0xff000000);
         previewView.setVisibility(View.GONE);
         page.addView(previewView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        page.addView(button("Enregistrer 2 s de diagnostic (images caméra)", v -> {
+            if (FingerService.instance == null) { report("Démarre d'abord."); return; }
+            FingerService.recordRequest = true;
+            report("Diagnostic : garde les doigts au-dessus du clavier pendant 2-3 s…");
+        }));
         page.addView(button("Copier le journal", v -> {
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Beast Fingers",
                 log + "\n" + FingerService.stats));

@@ -55,6 +55,12 @@ public final class FingerService extends Service {
     /** Latest annotated camera image for the in-app preview (null when not requested). */
     static final AtomicReference<Bitmap> preview = new AtomicReference<>();
     static volatile boolean previewWanted;
+    /** Set by the activity: record the next frames into a zip in Downloads. */
+    static volatile boolean recordRequest;
+    private java.util.zip.ZipOutputStream rec;
+    private java.io.File recFile;
+    private StringBuilder recMeta;
+    private int recCount;
     static volatile String stats = "";
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -409,6 +415,7 @@ public final class FingerService extends Service {
                 if (ov != null) ov.show(new FingerOverlayView.Frame(r.contours, t, r.vx, r.vy));
                 lastFrameMs = SystemClock.elapsedRealtime();
                 if (previewWanted) makePreview(decoded, r);
+                if (recordRequest || rec != null) record(jpeg, decoded, t, lm, r);
 
                 long dt = SystemClock.elapsedRealtime() - t0;
                 avgMs = avgMs == 0 ? dt : avgMs * 0.9f + dt * 0.1f;
@@ -484,6 +491,67 @@ public final class FingerService extends Service {
                 for (int i = 0; i < 21; i++) c.drawCircle(lm[2 * i] * s, lm[2 * i + 1] * s, 2.5f, p);
         }
         preview.set(b); // never recycled here: the activity may still be drawing the previous one
+    }
+
+    // ------------------------------------------------------------------ diagnostic recording
+    private void record(byte[] jpeg, Bitmap frame, long t, List<float[]> lm, FrameProcessor.Result r) {
+        try {
+            if (rec == null) {
+                recordRequest = false;
+                recFile = new java.io.File(getCacheDir(), "beast-diag.zip");
+                rec = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(recFile));
+                recMeta = new StringBuilder();
+                recMeta.append("version ").append(MainActivity.VERSION).append(" model ").append(Build.MODEL)
+                    .append(" screen ").append(screenW).append('x').append(screenH).append(" rot ").append(rotation)
+                    .append(" frame ").append(frameOn).append(' ').append(frameDp).append("dp density ")
+                    .append(getResources().getDisplayMetrics().density).append('\n');
+                recCount = 0;
+                status("Enregistrement du diagnostic (60 images)…");
+            }
+            String name = String.format(Locale.US, "f%03d.jpg", recCount);
+            rec.putNextEntry(new java.util.zip.ZipEntry(name));
+            if (jpeg != null) rec.write(jpeg);
+            else frame.compress(Bitmap.CompressFormat.JPEG, 92, rec);
+            rec.closeEntry();
+            recMeta.append(name).append(" t=").append(t).append(" hands=").append(lm.size());
+            for (float[] h : lm) {
+                recMeta.append(" [");
+                for (int i = 0; i < h.length; i++) recMeta.append(i == 0 ? "" : ",").append(String.format(Locale.US, "%.1f", h[i]));
+                recMeta.append(']');
+            }
+            if (r.quad != null) {
+                recMeta.append(" quad=");
+                for (int i = 0; i < 8; i++) recMeta.append(i == 0 ? "" : ",").append(String.format(Locale.US, "%.1f", r.quad[i]));
+            }
+            recMeta.append(" | ").append(r.diag).append('\n');
+            if (++recCount >= 60) finishRecording();
+        } catch (Exception e) {
+            status("Diagnostic : " + e);
+            try { if (rec != null) rec.close(); } catch (Exception ignored) { }
+            rec = null;
+        }
+    }
+
+    private void finishRecording() throws Exception {
+        rec.putNextEntry(new java.util.zip.ZipEntry("meta.txt"));
+        rec.write(recMeta.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        rec.closeEntry();
+        rec.close();
+        rec = null;
+        String name = "beast-diag-" + new java.text.SimpleDateFormat("HHmmss", Locale.US).format(new java.util.Date()) + ".zip";
+        android.content.ContentValues cv = new android.content.ContentValues();
+        cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
+        cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip");
+        cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/BeastFingers");
+        android.net.Uri uri = getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+        if (uri == null) throw new java.io.IOException("MediaStore refuse le fichier");
+        try (java.io.OutputStream out = getContentResolver().openOutputStream(uri);
+             java.io.InputStream in = new java.io.FileInputStream(recFile)) {
+            byte[] buf = new byte[65536]; int k;
+            while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+        }
+        recFile.delete();
+        status("Diagnostic enregistré : Téléchargements/BeastFingers/" + name + " — envoie-le à Claude.");
     }
 
     private void status(String msg) {
