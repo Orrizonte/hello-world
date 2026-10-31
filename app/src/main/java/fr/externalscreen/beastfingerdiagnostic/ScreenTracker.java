@@ -45,11 +45,36 @@ public final class ScreenTracker {
      * @param prior  previous quad (same convention) or null
      * @param expectedAspect screen height/width in its current orientation (e.g. 2.2 portrait)
      */
+    /**
+     * Frame mode: the app draws a reference frame on the display border (outer
+     * white line, inner black line). In the camera this is a thin bright RIDGE
+     * (dark on both sides) forming a closed quadrilateral, whatever the room
+     * brightness or the UI theme. It is used for acquisition and to validate
+     * tracking.
+     */
+    public boolean frameMode = true;
+    private boolean[] ridge;      // full resolution
+    private boolean[] ridgeSmall; // half resolution (OR of 2x2)
+    private int[] rlabels, rqueue;
+    private float lastRing;
+    public float lastRingSupport() { return lastRing; }
+
     public Quad detect(int[] luma, boolean[] skin, int w, int h, Quad prior, float expectedAspect, boolean mirrored) {
         lastMode = 0;
+        lastRing = 0;
+        if (frameMode) computeRidge(luma, w, h);
         if (prior != null) {
             Quad t = track(luma, w, h, prior, expectedAspect);
+            if (t != null && frameMode) {
+                lastRing = ringSupport(t.pts, w, h);
+                if (lastRing < 0.45f) t = null;
+            }
             if (t != null) { lastMode = 1; return t; }
+        }
+        if (frameMode) {
+            Quad r = ringAcquire(luma, w, h, prior, expectedAspect, mirrored);
+            if (r != null) { lastMode = 3; return r; }
+            return null; // with the frame on, never trust brightness blobs (windows, walls, hands)
         }
         int sw = w / 2, sh = h / 2, n = sw * sh;
         if (sw < 32 || sh < 32) return null;
@@ -434,6 +459,164 @@ public final class ScreenTracker {
         return a + fy * (b - a);
     }
 
+    // ------------------------------------------------------------ frame (ridge) mode
+    private void computeRidge(int[] luma, int w, int h) {
+        int n = w * h;
+        if (ridge == null || ridge.length != n) ridge = new boolean[n];
+        int k = 4;
+        for (int y = 0; y < h; y++) {
+            int row = y * w;
+            for (int x = 0; x < w; x++) {
+                int i = row + x, v = luma[i];
+                boolean r = false;
+                if (v >= 70) {
+                    int t = Math.max(22, v / 6);
+                    if (y >= k && y < h - k) {
+                        int a = luma[i - k * w], b = luma[i + k * w];
+                        if (v - Math.max(a, b) > t) r = true;
+                    }
+                    if (!r && x >= k && x < w - k) {
+                        int a = luma[i - k], b = luma[i + k];
+                        if (v - Math.max(a, b) > t) r = true;
+                    }
+                }
+                ridge[i] = r;
+            }
+        }
+        int sw = w / 2, sh = h / 2;
+        if (ridgeSmall == null || ridgeSmall.length != sw * sh) {
+            ridgeSmall = new boolean[sw * sh]; rlabels = new int[sw * sh]; rqueue = new int[sw * sh];
+        }
+        for (int y = 0; y < sh; y++) for (int x = 0; x < sw; x++) {
+            int i = 2 * y * w + 2 * x;
+            ridgeSmall[y * sw + x] = ridge[i] || ridge[i + 1] || ridge[i + w] || ridge[i + w + 1];
+        }
+    }
+
+    /** Fraction of perimeter samples with a ridge pixel within 4 px inside the side. */
+    float ringSupport(float[] q, int w, int h) {
+        if (ridge == null) return 0;
+        float cx = (q[0] + q[2] + q[4] + q[6]) / 4, cy = (q[1] + q[3] + q[5] + q[7]) / 4;
+        int ok = 0, total = 0; float minSide = 1;
+        for (int s = 0; s < 4; s++) {
+            int a = s, b = (s + 1) % 4;
+            float ax = q[2 * a], ay = q[2 * a + 1], bx = q[2 * b], by = q[2 * b + 1];
+            float len = (float) Math.hypot(bx - ax, by - ay);
+            if (len < 8) return 0;
+            float nx = (by - ay) / len, ny = -(bx - ax) / len;
+            if (nx * ((ax + bx) / 2 - cx) + ny * ((ay + by) / 2 - cy) < 0) { nx = -nx; ny = -ny; }
+            int sideOk = 0, sideN = 24;
+            for (int k = 0; k < sideN; k++) {
+                float t = 0.06f + 0.88f * k / (sideN - 1);
+                float sx = ax + (bx - ax) * t, sy = ay + (by - ay) * t;
+                for (float o = -1.5f; o <= 5.5f; o += 1f) {
+                    int px = Math.round(sx - nx * o), py = Math.round(sy - ny * o);
+                    if (px < 0 || py < 0 || px >= w || py >= h) continue;
+                    if (ridge[py * w + px]) { sideOk++; break; }
+                }
+            }
+            ok += sideOk; total += sideN;
+            minSide = Math.min(minSide, sideOk / (float) sideN);
+        }
+        // every side must show some of the frame (fingers hide parts of it)
+        if (minSide < 0.2f) return Math.min(0.3f, ok / (float) total);
+        return ok / (float) total;
+    }
+
+    private Quad ringAcquire(int[] luma, int w, int h, Quad prior, float expectedAspect, boolean mirrored) {
+        int sw = w / 2, sh = h / 2, n = sw * sh;
+        Arrays.fill(rlabels, 0);
+        int count = 0;
+        ArrayList<int[]> boxes = new ArrayList<>(); // minX,minY,maxX,maxY,area
+        boxes.add(null);
+        for (int st = 0; st < n; st++) {
+            if (!ridgeSmall[st] || rlabels[st] != 0) continue;
+            int id = ++count, front = 0, back = 0;
+            rqueue[back++] = st; rlabels[st] = id;
+            int x0 = sw, y0 = sh, x1 = -1, y1 = -1;
+            while (front < back) {
+                int p = rqueue[front++];
+                int px = p % sw, py = p / sw;
+                if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+                for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+                    int qx = px + dx, qy = py + dy;
+                    if (qx < 0 || qy < 0 || qx >= sw || qy >= sh) continue;
+                    int q = qy * sw + qx;
+                    if (ridgeSmall[q] && rlabels[q] == 0) { rlabels[q] = id; rqueue[back++] = q; }
+                }
+            }
+            boxes.add(new int[]{x0, y0, x1, y1, back});
+        }
+        int minSpan = Math.max(16, Math.min(sw, sh) / 10);
+        Quad best = null;
+        for (int c = 1; c <= count; c++) {
+            int[] b = boxes.get(c);
+            if (b[2] - b[0] < minSpan && b[3] - b[1] < minSpan) continue;
+            if (b[4] < 20) continue;
+            // group: this piece + pieces around it (the frame is cut by fingers)
+            int ex = (b[2] - b[0]) / 2 + 4, ey = (b[3] - b[1]) / 2 + 4;
+            ArrayList<Integer> members = new ArrayList<>();
+            members.add(c);
+            for (int o = 1; o <= count; o++) {
+                if (o == c) continue;
+                int[] bo = boxes.get(o);
+                if (bo[4] < 6) continue;
+                if (bo[2] < b[0] - ex || bo[0] > b[2] + ex || bo[3] < b[1] - ey || bo[1] > b[3] + ey) continue;
+                members.add(o);
+            }
+            for (int variant = 0; variant < 2; variant++) {
+                java.util.HashSet<Integer> set = new java.util.HashSet<>();
+                if (variant == 0) set.add(c); else { if (members.size() == 1) break; set.addAll(members); }
+                ArrayList<float[]> pts = new ArrayList<>();
+                int gx0 = sw, gy0 = sh, gx1 = 0, gy1 = 0;
+                for (int i : set) { int[] bb = boxes.get(i); gx0 = Math.min(gx0, bb[0]); gy0 = Math.min(gy0, bb[1]); gx1 = Math.max(gx1, bb[2]); gy1 = Math.max(gy1, bb[3]); }
+                for (int y = gy0; y <= gy1; y++) {
+                    int mn = -1, mx = -1;
+                    for (int x = gx0; x <= gx1; x++) {
+                        int l = rlabels[y * sw + x];
+                        if (l != 0 && set.contains(l)) { if (mn < 0) mn = x; mx = x; }
+                    }
+                    if (mn >= 0) { pts.add(new float[]{mn, y}); pts.add(new float[]{mx + 1, y + 1}); pts.add(new float[]{mn, y + 1}); pts.add(new float[]{mx + 1, y}); }
+                }
+                float[][] hull = simplify(convexHull(pts), 16);
+                if (hull.length < 4) continue;
+                float[] quad = bestQuad(hull);
+                if (quad == null || !anglesOk(quad)) continue;
+                float hullFit = Math.abs(polyArea8(quad)) / Math.max(1f, Math.abs(polyArea(hull)));
+                if (hullFit < 0.85f) continue;
+                for (int i = 0; i < 8; i++) quad[i] *= 2f;
+                float area = Math.abs(polyArea8(quad));
+                if (area < (w * h) / 120f || area > w * h * 0.7f) continue;
+                float sup = ringSupport(quad, w, h);
+                if (sup < 0.55f) continue;
+                orderClockwise(quad, mirrored);
+                orient(quad, prior);
+                float aspect = aspect(quad);
+                float aspectTerm = (float) Math.exp(-0.6 * Math.abs(Math.log(aspect / Math.max(0.2f, expectedAspect * 0.8f))));
+                float priorTerm = 1f;
+                if (prior != null) {
+                    float d = meanCornerDistance(quad, prior.pts);
+                    float diag = (float) Math.hypot(prior.pts[4] - prior.pts[0], prior.pts[5] - prior.pts[1]);
+                    priorTerm = 1f + (float) Math.exp(-d / Math.max(4f, 0.12f * diag));
+                }
+                float score = (float) Math.sqrt(area / (w * h)) * sup * sup * aspectTerm * priorTerm;
+                if (DEBUG) System.err.printf("ring c=%d var=%d area=%.0f sup=%.2f asp=%.2f score=%.3f%n", c, variant, area, sup, aspectTerm, score);
+                if (best == null || score > best.score) {
+                    best = new Quad();
+                    System.arraycopy(quad, 0, best.pts, 0, 8);
+                    best.score = score;
+                }
+            }
+        }
+        if (best != null) {
+            Quad before = best.copy();
+            refine(best, luma, w, h);
+            if (ringSupport(best.pts, w, h) < 0.5f) best = before;
+            lastRing = ringSupport(best.pts, w, h);
+        }
+        return best;
+    }
+
     /** Fraction of side samples with a clear bright-inside / dark-outside edge (within 3 px). */
     static float edgeSupport(float[] q, int[] luma, int w, int h) {
         float cx = (q[0] + q[2] + q[4] + q[6]) / 4, cy = (q[1] + q[3] + q[5] + q[7]) / 4;
@@ -497,6 +680,7 @@ public final class ScreenTracker {
                     if (-gg >= 14f && score > bestScore) { bestScore = score; bi = o + steps; }
                 }
                 if (bi < 0) continue;
+                bi = outermost(g, bi, 2 * steps + 1);
                 float off = bi - steps;
                 if (bi > 0 && bi < 2 * steps) {
                     float l = g[bi - 1], c = g[bi], r = g[bi + 1];
@@ -521,9 +705,26 @@ public final class ScreenTracker {
         if (a1 < 0.6f * a0 || a1 > 1.6f * a0 || !anglesOk(out.pts)) return null;
         for (int i = 0; i < 8; i++) if (out.pts[i] < -2 || out.pts[i] > (i % 2 == 0 ? w + 2 : h + 2)) return null;
         out.score = prior.score;
+        float asp = aspect(out.pts);
+        if (asp < expectedAspect * 0.25f || asp > expectedAspect * 2.5f) return null;
         refine(out, luma, w, h);
         if (edgeSupport(out.pts, luma, w, h) < 0.45f) return null;
         return out;
+    }
+
+    /**
+     * The display edge is the OUTERMOST bright->dark transition (frame line or
+     * screen content -> bezel); inner ones (content -> black frame line) are
+     * just as strong, so take the last local minimum with >= 60% of the best.
+     */
+    private static int outermost(float[] g, int bi, int len) {
+        float limit = 0.6f * g[bi];
+        int pick = bi;
+        for (int o = bi + 1; o < len; o++) {
+            boolean localMin = (o == len - 1 || g[o] <= g[o + 1]) && g[o] <= g[o - 1];
+            if (g[o] <= limit && g[o] <= -14f && localMin) pick = o;
+        }
+        return pick;
     }
 
     private void refine(Quad quad, int[] luma, int w, int h) {
@@ -555,6 +756,7 @@ public final class ScreenTracker {
                 int bi = -1;
                 for (int o = 0; o < 13; o++) if (g[o] < bestG) { bestG = g[o]; bi = o; }
                 if (bi < 0) continue;
+                bi = outermost(g, bi, 13);
                 float off = bi - 6;
                 if (bi > 0 && bi < 12) {
                     float l = g[bi - 1], c = g[bi], r = g[bi + 1];

@@ -50,7 +50,7 @@ public final class FingerSegmenter {
     public int lastFgCells, lastComponents, lastRejected, lastValidPct;
     public float lastGain;
 
-    public void reset() { gw = 0; skinUpdates = 0; }
+    public void reset() { gw = 0; gh = 0; }
 
     public int gridW() { return gw; }
     public int gridH() { return gh; }

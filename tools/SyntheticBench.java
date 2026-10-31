@@ -14,7 +14,7 @@ public class SyntheticBench {
     static final int W = 1280, H = 720, SW = 1080, SH = 2412;
     static Random rnd = new Random(7);
 
-    static boolean FRAME = false, SMALL = false;
+    static boolean FRAME = false, SMALL = false, BRIGHT = false;
     static int[] content(boolean dark) {
         int[] c = new int[SW * SH];
         int bg = dark ? 0xff202124 : 0xffffffff, kb = dark ? 0xff303134 : 0xffe8eaed,
@@ -32,7 +32,8 @@ public class SyntheticBench {
                     if (fx > 0.38 && fx < 0.62 && fy > 0.35 && fy < 0.65 && ((x + y) % 7 < 4)) v = ink;
                 }
             }
-            if (FRAME && (x < 27 || y < 27 || x >= SW - 27 || y >= SH - 27)) v = 0xffd0d0d0;
+            if (FRAME && (x < 54 || y < 54 || x >= SW - 54 || y >= SH - 54)) v = 0xff000000;
+            if (FRAME && (x < 27 || y < 27 || x >= SW - 27 || y >= SH - 27)) v = 0xffffffff;
             c[y * SW + x] = v;
         }
         return c;
@@ -77,11 +78,12 @@ public class SyntheticBench {
         boolean dark = sc.contains("dark");
         boolean noLm = sc.contains("nolm");
         boolean early = sc.contains("early");
-        FRAME = sc.contains("frame"); SMALL = sc.contains("small"); SPEED = sc.contains("fast") ? 3.5 : 1;
+        FRAME = sc.contains("frame"); SMALL = sc.contains("small"); BRIGHT = sc.contains("bright"); SPEED = sc.contains("fast") ? 3.5 : 1;
         float dim = sc.contains("dim") ? 0.55f : 0.92f;
         int[] skinRgb = sc.contains("tone") ? new int[]{125, 85, 62} : new int[]{200, 145, 120};
         int[] scr = content(dark);
         FrameProcessor fp = new FrameProcessor();
+        fp.setFrameMode(FRAME);
         int[] img = new int[W * H];
         double iouSum = 0; int iouN = 0; double cornerErr = 0; int found = 0;
         long ms = 0;
@@ -103,7 +105,8 @@ public class SyntheticBench {
             for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
                 int r, g, b;
                 // room
-                int base = 70 + (int) (50.0 * y / H) + ((x / 64 + y / 64) % 2) * 8;
+                int base = (BRIGHT ? 150 : 70) + (int) (50.0 * y / H) + ((x / 64 + y / 64) % 2) * 8;
+                if (BRIGHT && x > 900 && y < 420) base = 245; // big window
                 r = base + 10; g = base; b = base - 12;
                 if (x < 260 && y < 200) { r = g = b = 250; } // window / lamp
                 c2b.map(x, y, o, 0);

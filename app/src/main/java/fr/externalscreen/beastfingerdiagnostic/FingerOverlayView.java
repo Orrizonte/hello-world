@@ -91,7 +91,12 @@ final class FingerOverlayView extends View {
         canvas.save();
         canvas.translate(-loc[0], -loc[1]); // draw in display coordinates
         if (frameOn && frameWidth > 0) {
+            // white line on the very edge + black line inside it: a thin bright
+            // ridge for the camera, whatever the room light or the UI theme
             float h = frameWidth / 2f;
+            border.setColor(0xff000000);
+            canvas.drawRect(3 * h, 3 * h, screenW - 3 * h, screenH - 3 * h, border);
+            border.setColor(0xffffffff);
             canvas.drawRect(h, h, screenW - h, screenH - h, border);
         }
         Frame f = frame;

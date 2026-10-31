@@ -150,6 +150,7 @@ public final class FingerService extends Service {
             return START_NOT_STICKY;
         }
         running = true;
+        processor.setFrameMode(frameOn);
         updateScreenGeometry();
         showOverlay();
         processing = new Thread(this::processLoop, "vision");
@@ -211,6 +212,7 @@ public final class FingerService extends Service {
             float d = getResources().getDisplayMetrics().density;
             overlay.configure(strokeAlpha, strokeDp * d, fillOn, frameOn, frameDp * d, predictOn);
         });
+        processor.setFrameMode(frameOn);
         processor.resetScreen();
     }
 

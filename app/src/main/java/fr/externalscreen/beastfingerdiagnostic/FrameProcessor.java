@@ -36,6 +36,8 @@ public final class FrameProcessor {
 
     public FingerSegmenter segmenter() { return segmenter; }
 
+    public void setFrameMode(boolean on) { if (tracker.frameMode != on) { tracker.frameMode = on; last = null; } }
+
     /** Forget the tracked screen (e.g. after the display rotated). */
     public void resetScreen() { last = null; }
 
@@ -82,6 +84,14 @@ public final class FrameProcessor {
 
         List<float[]> handsIn = hands == null ? new ArrayList<>() : hands;
         r.contours = segmenter.process(argb, w, h, s2c, c2s, handsIn, screenW, screenH);
+        // Sanity: fingers never cover most of the screen; a huge silhouette means
+        // the screen was mis-located or the background model is stale.
+        float covered = 0;
+        for (float[] c : r.contours) covered += Contours.area(c);
+        if (Math.abs(covered) > 0.4f * screenW * screenH) {
+            r.contours = Collections.emptyList();
+            segmenter.reset();
+        }
 
         // hand velocity in screen space (for display-side prediction)
         if (!handsIn.isEmpty() && handTimeNs != lastHandNs) {
@@ -106,6 +116,7 @@ public final class FrameProcessor {
         r.trackMs = (System.nanoTime() - t0) / 1_000_000;
         FingerSegmenter s = segmenter;
         r.diag = (r.screenHeld ? "écran (maintenu)" : "écran OK") + (q.refined ? " sous-pixel" : "")
+            + String.format(java.util.Locale.US, " cadre %.0f%%", 100 * tracker.lastRingSupport())
             + " | fond appris " + s.lastValidPct + "% | gain " + String.format(java.util.Locale.US, "%.2f", s.lastGain)
             + " | peau " + (s.skinTrained() ? "adaptée" : "générique")
             + " | zones doigts " + (s.lastComponents - s.lastRejected) + "/" + s.lastComponents

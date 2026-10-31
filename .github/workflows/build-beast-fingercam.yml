@@ -37,7 +37,7 @@ jobs:
             P=app/src/main/java/fr/externalscreen/beastfingerdiagnostic
             javac -d bench/out $P/ScreenTracker.java $P/Homography.java $P/OneEuroFilter.java $P/Contours.java \
                 $P/FingerSegmenter.java $P/FrameProcessor.java tools/SyntheticBench.java
-            for s in early early-dark-frame-small late-nolm early-dim-tone-frame-small-fast; do
+            for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast late-nolm; do
               java -Djava.awt.headless=true -cp bench/out SyntheticBench $s | tail -1
             done
           } 2>&1 | tee build.log
