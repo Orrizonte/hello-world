@@ -31,6 +31,7 @@ import java.util.List;
 public final class FingertipDetector implements AutoCloseable {
     private final HandLandmarker handLandmarker;
     private final AutoPhoneTracker phoneTracker;
+    private final PhoneFingerSegmenter fingerSegmenter = new PhoneFingerSegmenter();
     private final Context context;
     public static final int[] TIPS={4,8,12,16,20};
     public static final int[] NEAR_TIPS={3,7,11,15,19};
@@ -42,6 +43,11 @@ public final class FingertipDetector implements AutoCloseable {
     private volatile float lastPhoneConfidence;
     private volatile int lastObjects;
     private volatile String lastPhoneLabel="aucun";
+    private volatile int lastSkinPixels;
+    private volatile int lastMovingPixels;
+    private volatile int lastFallbackRegions;
+    private volatile int lastPhonePixels;
+    private volatile boolean lastBackgroundReady;
 
     public int lastHands(){return lastHands;}
     public int lastInside(){return lastInside;}
@@ -51,6 +57,11 @@ public final class FingertipDetector implements AutoCloseable {
     public float phoneConfidence(){return lastPhoneConfidence;}
     public int objectCandidates(){return lastObjects;}
     public String phoneLabel(){return lastPhoneLabel;}
+    public int skinPixels(){return lastSkinPixels;}
+    public int movingPixels(){return lastMovingPixels;}
+    public int fallbackRegions(){return lastFallbackRegions;}
+    public int screenSamples(){return lastPhonePixels;}
+    public boolean backgroundReady(){return lastBackgroundReady;}
 
     public static final class Patch {
         public final Bitmap image;
@@ -107,11 +118,27 @@ public final class FingertipDetector implements AutoCloseable {
         lastPhoneConfidence=phoneTracker.confidence();
         lastPhoneLabel=phoneTracker.label();
         phoneVisible=phone!=null;
-        if(phone==null)return Collections.emptyList();
+        if(phone==null){
+            lastSkinPixels=0;
+            lastMovingPixels=0;
+            lastFallbackRegions=0;
+            lastPhonePixels=0;
+            lastBackgroundReady=false;
+            return Collections.emptyList();
+        }
 
         RectF glass=AutoPhoneTracker.estimatedGlass(phone);
         if(glass==null || glass.width()<.02f || glass.height()<.03f)
             return Collections.emptyList();
+
+        // Segmentation does not require palms, unlike HandLandmarker. This
+        // fallback is designed for only-visible-fingers near a mobile screen.
+        List<Patch> skinRegions=fingerSegmenter.extract(original,glass);
+        lastSkinPixels=fingerSegmenter.skinPixels();
+        lastMovingPixels=fingerSegmenter.movingPixels();
+        lastFallbackRegions=fingerSegmenter.regions();
+        lastPhonePixels=fingerSegmenter.sampledPixels();
+        lastBackgroundReady=fingerSegmenter.ready();
         ArrayList<Patch> patches=new ArrayList<>();
         for(List<NormalizedLandmark> hand:handResult.landmarks()){
             if(hand.size()<21)continue;
@@ -143,7 +170,13 @@ public final class FingertipDetector implements AutoCloseable {
                 patches.add(new Patch(feathered,px,py,radiusX,radiusY));
             }
         }
-        return patches;
+        if(!patches.isEmpty()){
+            // Prefer ML-localised fingertips when a whole hand is visible.
+            // Avoid overlaying two copies of the same pixels.
+            for(Patch p:skinRegions)p.release();
+            return patches;
+        }
+        return skinRegions;
     }
 
     private static Bitmap feather(Bitmap src){
