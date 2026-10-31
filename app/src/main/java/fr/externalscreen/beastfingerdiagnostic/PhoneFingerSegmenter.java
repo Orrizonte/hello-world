@@ -27,6 +27,11 @@ public final class PhoneFingerSegmenter {
     private boolean[] candidate;
     private boolean[] mask;
     private boolean[] visited;
+    private int[] components;
+    private RectF previousGlass;
+    private float[] priorCentersX = new float[8];
+    private float[] priorCentersY = new float[8];
+    private int priorCount;
     private int[] queue;
     private volatile int lastSkinPixels;
     private volatile int lastMovingPixels;
@@ -36,6 +41,13 @@ public final class PhoneFingerSegmenter {
     private int elapsed;
     private final float[] lastPhone = new float[4];
 
+    private static final class Region {
+        final int minX,maxX,minY,maxY,area,id;
+        Region(int minX,int maxX,int minY,int maxY,int area,int id){
+            this.minX=minX;this.maxX=maxX;this.minY=minY;this.maxY=maxY;
+            this.area=area;this.id=id;
+        }
+    }
     public int skinPixels(){return lastSkinPixels;}
     public int movingPixels(){return lastMovingPixels;}
     public int regions(){return lastRegions;}
@@ -71,7 +83,19 @@ public final class PhoneFingerSegmenter {
         lastRegions=0;
         lastSkinPixels=0;
         lastMovingPixels=0;
-        if(frame==null || glass==null)return Collections.emptyList();
+        if(frame==null || glass==null){
+            priorCount=0;
+            previousGlass=null;
+            return Collections.emptyList();
+        }
+        // When phone scale changes abruptly, a background from its former
+        // perspective must not be mistaken for moving fingers.
+        if(previousGlass!=null && (Math.abs(glass.width()/Math.max(.01f,previousGlass.width())-1f)>.23f
+            || Math.abs(glass.height()/Math.max(.01f,previousGlass.height())-1f)>.23f)) {
+            background=null;
+            priorCount=0;
+        }
+        previousGlass=new RectF(glass);
         int W=frame.getWidth(),H=frame.getHeight();
         int left=clamp((int)Math.floor(glass.left*W),0,W-2);
         int top=clamp((int)Math.floor(glass.top*H),0,H-2);
@@ -102,6 +126,7 @@ public final class PhoneFingerSegmenter {
             candidate=new boolean[n];
             mask=new boolean[n];
             visited=new boolean[n];
+            components=new int[n];
             queue=new int[n];
             elapsed=0;
             lastSamples=n;
@@ -136,6 +161,13 @@ public final class PhoneFingerSegmenter {
             }
         }
 
+        // If virtually all screen pixels moved at once, the camera/phone
+        // perspective or lighting changed: this is NOT a mass of fingertips.
+        if(lastMovingPixels>n*.12f){
+            background=pixels.clone();
+            priorCount=0;
+            return Collections.emptyList();
+        }
         // Closing small skin holes (nails, highlights) and rejecting isolated
         // compression artifacts. No whole-hand image can leak through the mask.
         for(int y=1;y<outH-1;y++){
@@ -146,20 +178,24 @@ public final class PhoneFingerSegmenter {
                 for(int dY=-1;dY<=1;dY++)
                     for(int dX=-1;dX<=1;dX++)
                         if(candidate[i+dY*outW+dX])count++;
-                mask[i]=(candidate[i]&&count>=3)||(!candidate[i]&&count>=7);
+                mask[i]=(candidate[i]&&count>=4)||(!candidate[i]&&count>=8);
             }
         }
         java.util.Arrays.fill(visited,false);
-        ArrayList<FingertipDetector.Patch> result=new ArrayList<>();
-        int minComponent=Math.max(12,n/2200);
-        int maxComponent=(int)(n*.18f);
+        java.util.Arrays.fill(components,0);
+        ArrayList<Region> regions=new ArrayList<>();
+        int minComponent=Math.max(30,n/1500);
+        int maxComponent=(int)(n*.065f);
+        int currentId=0;
         for(int y=1;y<outH-1;y++){
             for(int x=1;x<outW-1;x++){
                 int start=y*outW+x;
                 if(!mask[start] || visited[start])continue;
                 int front=0,back=0,area=0;
+                int componentId=++currentId;
                 queue[back++]=start;
                 visited[start]=true;
+                components[start]=componentId;
                 int minX=x,maxX=x,minY=y,maxY=y;
                 while(front<back){
                     int i=queue[front++];
@@ -173,47 +209,91 @@ public final class PhoneFingerSegmenter {
                         if(nx<1||nx>=outW-1||ny<1||ny>=outH-1)continue;
                         if(mask[next]&&!visited[next]){
                             visited[next]=true;
+                            components[next]=componentId;
                             queue[back++]=next;
                         }
                     }
                 }
+                int bw=maxX-minX+1,bh=maxY-minY+1;
+                // A large contiguous coloured blob is probably a palm,
+                // reflection or UI region rather than an isolated fingertip.
                 if(area<minComponent || area>maxComponent ||
-                    maxX-minX<2 || maxY-minY<2)continue;
-                minX=Math.max(0,minX-2);maxX=Math.min(outW-1,maxX+2);
-                minY=Math.max(0,minY-2);maxY=Math.min(outH-1,maxY+2);
-                int patchW=maxX-minX+1,patchH=maxY-minY+1;
-                int[] rgba=new int[patchW*patchH];
-                int filled=0;
-                for(int yy=minY;yy<=maxY;yy++){
-                    for(int xx=minX;xx<=maxX;xx++){
-                        int src=yy*outW+xx;
-                        if(!mask[src] || !visited[src])continue;
-                        int close=0;
-                        for(int dy=-1;dy<=1;dy++){
-                            for(int dx=-1;dx<=1;dx++){
-                                int ax=xx+dx,ay=yy+dy;
-                                if(ax>=0&&ax<outW&&ay>=0&&ay<outH&&mask[ay*outW+ax])
-                                    close++;
-                            }
-                        }
-                        int alpha=close>=7?230:close>=4?175:110;
-                        rgba[(yy-minY)*patchW+(xx-minX)]=(alpha<<24)|
-                            (pixels[src]&0x00ffffff);
-                        filled++;
-                    }
-                }
-                if(filled<minComponent)continue;
-                Bitmap skin=Bitmap.createBitmap(rgba,patchW,patchH,Bitmap.Config.ARGB_8888);
-                float centerX=(minX+maxX+1f)/(2f*outW);
-                float centerY=(minY+maxY+1f)/(2f*outH);
-                float radiusX=patchW/(2f*outW);
-                float radiusY=patchH/(2f*outH);
-                result.add(new FingertipDetector.Patch(
-                    skin,centerX,centerY,radiusX,radiusY));
-                if(result.size()>=12)break;
+                    bw<4 || bh<4 || bw>outW*.32f || bh>outH*.28f)continue;
+                regions.add(new Region(minX,maxX,minY,maxY,area,componentId));
             }
-            if(result.size()>=12)break;
         }
+        regions.sort((a,b)->Integer.compare(b.area,a.area));
+        ArrayList<FingertipDetector.Patch> result=new ArrayList<>();
+        float[] nextXs=new float[8],nextYs=new float[8];
+        int nextCount=0;
+        for(Region region:regions){
+            float centerX=(region.minX+region.maxX+1f)/(2f*outW);
+            float centerY=(region.minY+region.maxY+1f)/(2f*outH);
+            // Suppress two skin islands erroneously interpreted as distinct
+            // fingers when they touch or overlap in the camera image.
+            boolean merged=false;
+            for(int i=0;i<nextCount;i++){
+                if(Math.hypot(nextXs[i]-centerX,nextYs[i]-centerY)<.07f){
+                    merged=true; break;
+                }
+            }
+            if(merged)continue;
+            boolean persistent=false;
+            for(int i=0;i<priorCount;i++){
+                if(Math.hypot(priorCentersX[i]-centerX,
+                              priorCentersY[i]-centerY)<.13f){
+                    persistent=true;break;
+                }
+            }
+            if(nextCount<8){
+                nextXs[nextCount]=centerX;
+                nextYs[nextCount]=centerY;
+                nextCount++;
+            }
+            // Motion-induced single-frame fragments should not flash onto
+            // the keyboard. Require two consecutive frames in the same zone.
+            if(!persistent)continue;
+
+            int minX=Math.max(0,region.minX-2);
+            int maxX=Math.min(outW-1,region.maxX+2);
+            int minY=Math.max(0,region.minY-2);
+            int maxY=Math.min(outH-1,region.maxY+2);
+            int patchW=maxX-minX+1,patchH=maxY-minY+1;
+            int[] rgba=new int[patchW*patchH];
+            int filled=0;
+            for(int yy=minY;yy<=maxY;yy++){
+                for(int xx=minX;xx<=maxX;xx++){
+                    int src=yy*outW+xx;
+                    // Critical bug fix: do not paint pixels from other
+                    // connected components previously marked visited.
+                    if(components[src]!=region.id)continue;
+                    int close=0;
+                    for(int dy=-1;dy<=1;dy++){
+                        for(int dx=-1;dx<=1;dx++){
+                            int ax=xx+dx,ay=yy+dy;
+                            if(ax>=0&&ax<outW&&ay>=0&&ay<outH&&
+                               components[ay*outW+ax]==region.id)close++;
+                        }
+                    }
+                    int alpha=close>=7?220:close>=4?155:85;
+                    rgba[(yy-minY)*patchW+(xx-minX)]=(alpha<<24)|
+                        (pixels[src]&0x00ffffff);
+                    filled++;
+                }
+            }
+            if(filled<minComponent)continue;
+            Bitmap skin=Bitmap.createBitmap(rgba,patchW,patchH,
+                Bitmap.Config.ARGB_8888);
+            float rx=patchW/(2f*outW),ry=patchH/(2f*outH);
+            result.add(new FingertipDetector.Patch(
+                skin,centerX,centerY,rx,ry));
+            // Conservative limit: don't show a swarm of unrelated image
+            // fragments. Actual ML fingertips are handled separately.
+            if(result.size()>=4)break;
+        }
+        priorCount=nextCount;
+        System.arraycopy(nextXs,0,priorCentersX,0,nextCount);
+        System.arraycopy(nextYs,0,priorCentersY,0,nextCount);
         lastRegions=result.size();
         return result;
     }
