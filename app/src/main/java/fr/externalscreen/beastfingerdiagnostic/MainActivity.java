@@ -28,7 +28,7 @@ public final class MainActivity extends Activity {
     private UsbManager usb;
     private TextView status;
     private TextView settingsSummary;
-    private SeekBar alphaSlider, scaleSlider, xSlider, ySlider;
+    private SeekBar alphaSlider, scaleSlider;
     private Spinner screenSpinner;
     private CheckBox mirrorCheck;
     private boolean receiversRegistered;
@@ -50,9 +50,9 @@ public final class MainActivity extends Activity {
     };
     private boolean calibrationReceiverRegistered;
     private boolean initialized;
-    private int alpha, scale, posX, posY, target;
+    private int alpha, scale, target;
     private boolean mirror;
-    private static final String PREFS = "settings.v084";
+    private static final String PREFS = "settings.v085";
 
     private final BroadcastReceiver events = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
@@ -119,7 +119,7 @@ public final class MainActivity extends Activity {
         setContentView(scroller);
 
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.8.4");
+        title.setText("BEAST FINGERCAM  v0.8.5");
         title.setTextSize(23);
         title.setTextColor(0xffffffff);
         page.addView(title);
@@ -179,13 +179,8 @@ public final class MainActivity extends Activity {
             value -> { alpha = value; onSettingChanged(); });
         scaleSlider = addSlider(page, "TAILLE DES BOUTS DE DOIGTS", 40, 180, scale,
             value -> { scale = value; onSettingChanged(); });
-        xSlider = addSlider(page, "POSITION X (droite +)", -500, 500, posX,
-            value -> { posX = value; onSettingChanged(); });
-        ySlider = addSlider(page, "POSITION Y (haut +)", -500, 500, posY,
-            value -> { posY = value; onSettingChanged(); });
-
         mirrorCheck = new CheckBox(this);
-        mirrorCheck.setText("Inverser la vidéo horizontalement");
+        mirrorCheck.setText("Inverser horizontalement les bouts des doigts");
         mirrorCheck.setTextColor(0xffffffff);
         mirrorCheck.setChecked(mirror);
         page.addView(mirrorCheck);
@@ -389,8 +384,6 @@ public final class MainActivity extends Activity {
         android.content.SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
         alpha = p.getInt("alpha", 65);
         scale = p.getInt("scale", 110);
-        posX = p.getInt("x", 0);
-        posY = p.getInt("y", 0);
         target = p.getInt("target", 0);
         mirror = p.getBoolean("mirror", false);
     }
@@ -398,7 +391,7 @@ public final class MainActivity extends Activity {
         if (!initialized) return;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putInt("alpha", alpha).putInt("scale", scale)
-            .putInt("x", posX).putInt("y", posY).putInt("target", target)
+            .putInt("target", target)
             .putBoolean("mirror", mirror).apply();
         showSettings();
         // Only deliver adjustments to an already-running overlay.
@@ -413,15 +406,12 @@ public final class MainActivity extends Activity {
     private void showSettings() {
         if (settingsSummary == null) return;
         settingsSummary.setText("Opacité : " + alpha + "%  |  Taille : " + scale +
-            "%  |  X : " + posX + "  |  Y : " + posY +
-            "  |  Écran : " + (target == 0 ? "téléphone" : "Beast"));
+            "%  |  Suivi automatique du téléphone  |  Écran : " + (target == 0 ? "téléphone" : "Beast"));
     }
     private Intent buildServiceIntent(String action) {
         return new Intent(this, OverlayCameraService.class).setAction(action)
             .putExtra(OverlayCameraService.EXTRA_ALPHA, alpha)
             .putExtra(OverlayCameraService.EXTRA_SCALE, scale)
-            .putExtra(OverlayCameraService.EXTRA_X, posX)
-            .putExtra(OverlayCameraService.EXTRA_Y, posY)
             .putExtra(OverlayCameraService.EXTRA_FLIP, mirror)
             .putExtra(OverlayCameraService.EXTRA_TARGET, target);
     }
