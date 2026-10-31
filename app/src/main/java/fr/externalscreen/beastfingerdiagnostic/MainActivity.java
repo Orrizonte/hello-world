@@ -52,7 +52,7 @@ public final class MainActivity extends Activity {
     private boolean initialized;
     private int alpha, scale, posX, posY, target;
     private boolean mirror;
-    private static final String PREFS = "settings.v082";
+    private static final String PREFS = "settings.v083";
 
     private final BroadcastReceiver events = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
@@ -119,15 +119,15 @@ public final class MainActivity extends Activity {
         setContentView(scroller);
 
         TextView title = new TextView(this);
-        title.setText("BEAST FINGERCAM  v0.8.2");
+        title.setText("BEAST FINGERCAM  v0.8.3");
         title.setTextSize(23);
         title.setTextColor(0xffffffff);
         page.addView(title);
 
         TextView introduction = new TextView(this);
-        introduction.setText("Affichage protégé : aucune fenêtre noire ni vidéo complète. " +
-            "La surcouche n'apparaît que si les bouts des doigts sont reconnus. " +
-            "Calibration projetée sur les Beast à leur résolution réelle.");
+        introduction.setText("SEULEMENT les bouts des doigts AU-DESSUS DE TON TÉLÉPHONE. " +
+            "Détection automatique de l'écran et des doigts ; suit les mouvements de tête. " +
+            "Pas de calibrage, pas de vidéo complète.");
         introduction.setTextSize(14);
         introduction.setTextColor(0xffb8d4ee);
         page.addView(introduction);
@@ -147,31 +147,18 @@ public final class MainActivity extends Activity {
         buttons.addView(stop, new LinearLayout.LayoutParams(0, dp(52), 1));
         stop.setOnClickListener(v -> stopOverlay());
 
-        Button calibrate = new Button(this);
-        calibrate.setText("CALIBRER L'ÉCRAN DU TÉLÉPHONE");
-        page.addView(calibrate);
-        calibrate.setOnClickListener(v -> {
-            if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("running", false)) {
-                report("Appuie d'abord sur DÉMARRER puis sur CALIBRER.");
-                return;
-            }
-            report("Capture locale de calibration demandée.");
-            try {
-                startService(new Intent(this, OverlayCameraService.class)
-                    .setAction(OverlayCameraService.ACTION_SNAPSHOT));
-            } catch (RuntimeException e) { report("Calibration : " + e); }
-        });
-        TextView calibrationHelp = label(
-            "Après le démarrage, regarde le téléphone en le laissant visible " +
-            "depuis les lunettes. Sur la photo, touche les quatre coins de sa VITRE " +
-            "dans l'ordre : haut gauche, haut droit, bas droit, bas gauche.");
-        page.addView(calibrationHelp);
+        TextView automatic=label("AUTOMATIQUE : La caméra des Beast détecte " +
+            "le téléphone et uniquement les bouts de doigts au-dessus de son écran. " +
+            "Aucun calibrage manuel, aucun geste simulé. " +
+            "Si le téléphone sort du champ, les doigts disparaissent.");
+        automatic.setTextColor(0xffa4ffd8);
+        page.addView(automatic);
 
         TextView modeTitle = label("Afficher la surimpression sur");
         page.addView(modeTitle);
         screenSpinner = new Spinner(this);
         String[] modes = {
-            "Téléphone / mode miroir (RECOMMANDÉ)",
+            "Téléphone / miroir (RECOMMANDÉ)",
             "VITURE Beast / écran externe indépendant (test)"
         };
         ArrayAdapter<String> modesAdapter = new ArrayAdapter<>(this,
@@ -214,16 +201,17 @@ public final class MainActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("MODE D'EMPLOI\n" +
-            "1. Sélectionne Téléphone / mode miroir pour conserver le clavier projeté.\n" +
-            "2. DÉMARRER ne doit plus masquer l'écran des lunettes.\n" +
-            "3. CALIBRER : l'image de la caméra apparaît en grand sur les Beast. " +
-            "Sur le téléphone, touche les quatre coins du téléphone dans l'image. " +
-            "Pince avec deux doigts pour zoomer.\n" +
-            "4. Après le calibrage, ouvre le clavier Android natif.\n" +
-            "5. De petites zones transparentes n'apparaissent que lorsque " +
-            "des bouts de doigts sont détectés. ARRÊTER depuis la notification.\n\n" +
-            "Diagnostic : mains=0 = aucune main reconnue ; mains>0, dans écran=0 " +
-            "= problème de cadrage ou de calibrage.");
+            "1. Branche les Beast et ouvre FingerCam.\n" +
+            "2. DÉMARRER : la surcouche reste vide tant que la caméra ne reconnaît " +
+            "pas le téléphone et ses doigts.\n" +
+            "3. Ouvre le clavier Android d'origine et tape normalement.\n" +
+            "4. Si tu bouges la tête, la zone du téléphone est recherchée " +
+            "à nouveau en temps réel : AUCUN CALIBRAGE.\n" +
+            "5. ARRÊTER depuis l'application ou la notification.\n\n" +
+            "Diagnostic : téléphone=non signifie que le téléphone n'a pas été " +
+            "reconnu dans la caméra. mains>0 indique que MediaPipe voit les mains. " +
+            "au-dessus>0 signifie que les pointes des doigts sont dans le " +
+            "rectangle de l'écran détecté.");
         help.setTextColor(0xffb8cde1);
         help.setTextSize(13);
         page.addView(help);
