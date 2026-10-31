@@ -4,6 +4,7 @@ on:
     branches:
       - build/beast-fingercam-android-20261031
       - build/beast-auto-phone-fingertips-20261031
+      - build/beast-fingers-pixels-v084-20261031
   workflow_dispatch:
   pull_request:
     branches:
@@ -37,7 +38,7 @@ jobs:
       - name: Upload APK and local signing utilities
         uses: actions/upload-artifact@v4
         with:
-          name: BeastFingerCam-v0.8.3-stage1
+          name: BeastFingerCam-v0.8.4-stage1
           path: |
             manual-build/apk/*.apk
             manual-build/signing-tools/apksigner.jar
