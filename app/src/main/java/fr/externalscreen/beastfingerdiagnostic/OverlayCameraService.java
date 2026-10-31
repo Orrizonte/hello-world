@@ -160,7 +160,7 @@ public final class OverlayCameraService extends Service {
                         lastTipCount=tips;
                     }
                     if (count<=3 || count%60==0 || (hands>0 && count%15==0)) {
-                        status("Reconnaissance image "+count+" : camera "+sourceWidth+"×"
+                        status("Reconnaissance image "+count+" : camera "+sourceWidth+"×"+
                             sourceHeight+" | mains="+hands+" | pointes="+candidates+
                             " | téléphone="+(phoneSeen?"OUI":"NON")+
                             " | objet="+phoneLabel+
