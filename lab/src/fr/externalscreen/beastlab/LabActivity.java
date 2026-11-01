@@ -78,8 +78,21 @@ public final class LabActivity extends Activity {
         }
     };
 
+    static void installCrashRecorder(Context c) {
+        final java.io.File f = new java.io.File(c.getFilesDir(), "last-crash.txt");
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            try (java.io.PrintWriter w = new java.io.PrintWriter(new java.io.FileWriter(f))) {
+                w.println(new Date() + " — thread " + t.getName());
+                e.printStackTrace(w);
+            } catch (Exception ignored) { }
+            if (prev != null) prev.uncaughtException(t, e);
+        });
+    }
+
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        installCrashRecorder(this);
         usb = getSystemService(UsbManager.class);
         IntentFilter f = new IntentFilter(USB_PERMISSION);
         f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
@@ -88,8 +101,14 @@ public final class LabActivity extends Activity {
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.2 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.3 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
+        java.io.File crash = new java.io.File(getFilesDir(), "last-crash.txt");
+        if (crash.exists()) {
+            try { log("— PLANTAGE PRÉCÉDENT —\n" + new String(java.nio.file.Files.readAllBytes(crash.toPath()), StandardCharsets.UTF_8)); }
+            catch (Exception ignored) { }
+            crash.delete();
+        }
         dumpUsb();
         dumpDisplays();
         main.post(depthPoll);
@@ -218,6 +237,7 @@ public final class LabActivity extends Activity {
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req != REQ_CAPTURE) return;
+        log("Retour de la demande de capture : code " + res + (data == null ? ", pas de jeton" : ", jeton reçu"));
         if (res != RESULT_OK || data == null) { log("Capture d'écran refusée."); return; }
         Intent i = new Intent(this, DepthService.class).putExtra(DepthService.EXTRA_CODE, res).putExtra(DepthService.EXTRA_DATA, data);
         try { startForegroundService(i); log("Recopie en cours de démarrage…"); }

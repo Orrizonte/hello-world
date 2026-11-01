@@ -82,8 +82,26 @@ public final class DepthService extends Service {
         events.add(new java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(new java.util.Date()) + "  [profondeur] " + s);
     }
 
+    @Override public void onCreate() {
+        super.onCreate();
+        LabActivity.installCrashRecorder(this);
+    }
+
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        try {
+            return start(intent);
+        } catch (Throwable t) {
+            event("ERREUR au démarrage : " + t);
+            for (StackTraceElement el : t.getStackTrace()) { event("   at " + el); if (el.getClassName().startsWith("android.app.ActivityThread")) break; }
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+    }
+
+    private int start(Intent intent) {
         instance = this;
+        if (intent == null) { event("relancé sans jeton : arrêt"); stopSelf(); return START_NOT_STICKY; }
+        event("service démarré (Android " + Build.VERSION.SDK_INT + ")");
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel("depth", "Profondeur Beast", NotificationManager.IMPORTANCE_LOW));
         Notification n = new Notification.Builder(this, "depth")
@@ -101,10 +119,13 @@ public final class DepthService extends Service {
             projection = mpm.getMediaProjection(code, data);
         } catch (RuntimeException e) { event("capture refusée : " + e); stopSelf(); return START_NOT_STICKY; }
         if (projection == null) { event("capture d'écran non accordée"); stopSelf(); return START_NOT_STICKY; }
+        event("MediaProjection obtenue");
         projection.registerCallback(new MediaProjection.Callback() {
             @Override public void onStop() { event("capture arrêtée par Android"); main.post(DepthService.this::stopSelf); }
         }, main);
-        if (!showOnGlasses()) { stopSelf(); return START_NOT_STICKY; }
+        boolean shown;
+        try { shown = showOnGlasses(); } catch (Throwable e) { event("affichage lunettes : " + e); shown = false; }
+        if (!shown) { stopSelf(); return START_NOT_STICKY; }
         return START_NOT_STICKY;
     }
 
@@ -132,7 +153,7 @@ public final class DepthService extends Service {
             @Override public void surfaceCreated(SurfaceHolder h) { event("surface créée"); }
             @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) {
                 event("surface " + w + "x" + hh);
-                startGl(h.getSurface(), w, hh);
+                try { startGl(h.getSurface(), w, hh); } catch (Throwable e) { event("startGl : " + e); }
             }
             @Override public void surfaceDestroyed(SurfaceHolder h) { event("surface détruite"); stopGl(); }
         });
@@ -170,7 +191,7 @@ public final class DepthService extends Service {
                 if (program == 0) initScene();
                 statStart = SystemClock.elapsedRealtime();
                 gl.post(renderLoop);
-            } catch (RuntimeException e) { event("GL : " + e); }
+            } catch (Throwable e) { event("GL : " + e); for (StackTraceElement el : e.getStackTrace()) { event("   at " + el); if (el.getClassName().startsWith("android.os.Looper")) break; } }
         });
     }
 
@@ -243,7 +264,7 @@ public final class DepthService extends Service {
                         framesIn / sec, framesOut / sec, surfW, surfH, sbs ? "3D côte à côte" : "2D", disparityPx, scale * 100, GLES20.glGetError());
                     framesIn = 0; framesOut = 0; statStart = now;
                 }
-            } catch (RuntimeException e) { event("rendu : " + e); }
+            } catch (Throwable e) { event("rendu : " + e); return; }
             gl.postDelayed(this, 8); // vsync-throttled by eglSwapBuffers
         }
     };
