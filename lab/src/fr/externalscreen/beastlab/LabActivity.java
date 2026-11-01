@@ -101,7 +101,7 @@ public final class LabActivity extends Activity {
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.3 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.4 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
         java.io.File crash = new java.io.File(getFilesDir(), "last-crash.txt");
         if (crash.exists()) {
@@ -109,6 +109,7 @@ public final class LabActivity extends Activity {
             catch (Exception ignored) { }
             crash.delete();
         }
+        dumpExitReasons();
         dumpUsb();
         dumpDisplays();
         main.post(depthPoll);
@@ -260,7 +261,9 @@ public final class LabActivity extends Activity {
     }
 
     private Button btn(String s, View.OnClickListener l) {
-        Button b = new Button(this); b.setText(s); b.setAllCaps(false); b.setTextSize(13); b.setOnClickListener(l); return b;
+        Button b = new Button(this); b.setText(s); b.setAllCaps(false); b.setTextSize(13);
+        b.setOnClickListener(v -> { log("▶ " + s); l.onClick(v); });
+        return b;
     }
 
     private TextView section(String s) { TextView t = text(s.toUpperCase(Locale.FRANCE), 13, 0xff7cc4ff); t.setPadding(0, dp(16), 0, dp(2)); return t; }
@@ -372,6 +375,34 @@ public final class LabActivity extends Activity {
             case -1001: return "fonction absente du SDK";
             default: return String.valueOf(r);
         }
+    }
+
+    /** Why did the previous runs end? (native crash, killed by Android, ANR…) */
+    private void dumpExitReasons() {
+        if (Build.VERSION.SDK_INT < 30) return;
+        try {
+            android.app.ActivityManager am = getSystemService(android.app.ActivityManager.class);
+            java.util.List<android.app.ApplicationExitInfo> list = am.getHistoricalProcessExitReasons(getPackageName(), 0, 3);
+            StringBuilder s = new StringBuilder("— FERMETURES PRÉCÉDENTES —\n");
+            String[] names = {"inconnue", "fin normale", "signal", "mémoire", "plantage Java", "plantage natif", "ANR", "init", "permission",
+                "trop de ressources", "demandée par l'utilisateur", "session utilisateur", "dépendance", "autre", "gelée", "paquet modifié", "paquet mis à jour"};
+            for (android.app.ApplicationExitInfo e : list) {
+                int r = e.getReason();
+                s.append(new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(e.getTimestamp())))
+                    .append("  raison ").append(r < names.length ? names[r] : String.valueOf(r))
+                    .append(", statut ").append(e.getStatus()).append(", ").append(e.getDescription()).append('\n');
+                if (r == android.app.ApplicationExitInfo.REASON_CRASH_NATIVE || r == android.app.ApplicationExitInfo.REASON_CRASH
+                        || r == android.app.ApplicationExitInfo.REASON_ANR) {
+                    try (java.io.InputStream in = e.getTraceInputStream()) {
+                        if (in != null) {
+                            byte[] buf = new byte[6000]; int n = in.read(buf);
+                            if (n > 0) s.append(new String(buf, 0, n, StandardCharsets.ISO_8859_1)).append('\n');
+                        }
+                    } catch (Exception ignored) { }
+                }
+            }
+            log(s.toString());
+        } catch (Exception e) { log("raisons de fermeture illisibles : " + e); }
     }
 
     private void dumpUsb() {
