@@ -40,7 +40,8 @@ public final class LabActivity extends Activity {
     private static final int VITURE_VID = 0x35CA;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final StringBuilder log = new StringBuilder();
-    private TextView logView, poseView;
+    private TextView logView, poseView, depthStats;
+    private static final int REQ_CAPTURE = 41;
     private UsbManager usb;
     private UsbDeviceConnection conn;
     private boolean connected, imuOn, wantConnected;
@@ -87,10 +88,11 @@ public final class LabActivity extends Activity {
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.1 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.2 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
         dumpUsb();
         dumpDisplays();
+        main.post(depthPoll);
     }
 
     @Override protected void onDestroy() {
@@ -137,6 +139,23 @@ public final class LabActivity extends Activity {
         p.addView(row(btn("Side mode OFF", v -> call("native_set_side_mode", 0)), btn("Side mode ON", v -> call("native_set_side_mode", 1))));
         p.addView(row(btn("2D bypass", v -> call("switch_dimension", 0)), btn("3D bypass", v -> call("switch_dimension", 1))));
 
+        p.addView(section("Vraie distance — prototype"));
+        p.addView(text("L'appli recopie l'écran du téléphone et le dessine elle-même dans les lunettes, une image par œil. "
+            + "L'écart entre les deux images règle la distance perçue. Le suivi de tête reste celui des lunettes (Natif + 3DoF / Smooth follow).", 12, 0xffa9b8c8));
+        p.addView(row(btn("Démarrer la recopie", v -> startDepth()), btn("Arrêter", v -> stopService(new Intent(this, DepthService.class)))));
+        p.addView(row(btn("Lunettes en 3D côte à côte", v -> { DepthService.sbs = true; call("native_switch_dimension", 1); }),
+            btn("Lunettes en 2D", v -> { DepthService.sbs = false; call("native_switch_dimension", 0); })));
+        p.addView(live("Écart par œil (− = plus près, + = plus loin)", -120, 120, 0, " px", v -> DepthService.disparityPx = v));
+        p.addView(live("Taille de l'écran", 20, 100, 80, " %", v -> DepthService.scale = v / 100f));
+        p.addView(live("Hauteur", -40, 40, 0, " %", v -> DepthService.offsetY = v / 100f));
+        android.widget.CheckBox pattern = new android.widget.CheckBox(this);
+        pattern.setText("Mire de test (damier) au lieu de l'écran");
+        pattern.setTextColor(0xffffffff);
+        pattern.setOnCheckedChangeListener((c, on) -> DepthService.testPattern = on);
+        p.addView(pattern);
+        depthStats = text("", 12, 0xff9be7b4);
+        p.addView(depthStats);
+
         p.addView(section("Orientation de la tête (IMU du SDK)"));
         p.addView(row(btn("IMU 60 Hz", v -> imu(true, 0)), btn("IMU 500 Hz", v -> imu(true, 4)), btn("Arrêter IMU", v -> imu(false, 0))));
         poseView = text("IMU arrêtée", 13, 0xff9be7b4);
@@ -164,6 +183,55 @@ public final class LabActivity extends Activity {
         box.addView(t); box.addView(s);
         return box;
     }
+
+    private interface IntSink { void set(int v); }
+
+    private View live(String label, int min, int max, int def, String unit, IntSink sink) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        TextView t = text(label + " : " + def + unit, 14, 0xffffffff);
+        SeekBar s = new SeekBar(this);
+        s.setMax(max - min); s.setProgress(def - min);
+        sink.set(def);
+        s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar b, int v, boolean u) { t.setText(label + " : " + (v + min) + unit); sink.set(v + min); }
+            @Override public void onStartTrackingTouch(SeekBar b) { }
+            @Override public void onStopTrackingTouch(SeekBar b) { log(label + " = " + (b.getProgress() + min) + unit); }
+        });
+        box.addView(t); box.addView(s);
+        return box;
+    }
+
+    private void startDepth() {
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            log("Autorise « Afficher par-dessus les autres applis » pour Beast Lab, puis réappuie.");
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 3);
+        android.media.projection.MediaProjectionManager mpm = getSystemService(android.media.projection.MediaProjectionManager.class);
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE);
+        log("Choisis « Tout l'écran » dans la demande de capture d'Android.");
+    }
+
+    @Override protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_CAPTURE) return;
+        if (res != RESULT_OK || data == null) { log("Capture d'écran refusée."); return; }
+        Intent i = new Intent(this, DepthService.class).putExtra(DepthService.EXTRA_CODE, res).putExtra(DepthService.EXTRA_DATA, data);
+        try { startForegroundService(i); log("Recopie en cours de démarrage…"); }
+        catch (RuntimeException e) { log("Démarrage refusé : " + e); }
+    }
+
+    private final Runnable depthPoll = new Runnable() {
+        @Override public void run() {
+            String e;
+            while ((e = DepthService.events.poll()) != null) logRaw(e);
+            if (depthStats != null) depthStats.setText(DepthService.instance != null ? DepthService.stats : "Recopie arrêtée");
+            main.postDelayed(this, 500);
+        }
+    };
 
     private LinearLayout row(View... vs) {
         LinearLayout r = new LinearLayout(this);
@@ -331,6 +399,11 @@ public final class LabActivity extends Activity {
             }
             log("Enregistré : Téléchargements/BeastLab/" + name);
         } catch (Exception e) { log("Enregistrement impossible : " + e); }
+    }
+
+    private void logRaw(String m) {
+        log.append(m).append('\n');
+        if (logView != null) logView.setText(log);
     }
 
     private void log(String m) {
