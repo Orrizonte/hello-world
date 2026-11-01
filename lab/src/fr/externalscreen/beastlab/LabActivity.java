@@ -43,12 +43,22 @@ public final class LabActivity extends Activity {
     private TextView logView, poseView;
     private UsbManager usb;
     private UsbDeviceConnection conn;
-    private boolean connected, imuOn;
+    private boolean connected, imuOn, wantConnected;
     private final String[] stateNames = {"luminosité", "volume", "mode d'affichage", "film électrochrome", "DoF natif",
         "porté", "distance", "taille"};
 
     private final BroadcastReceiver rx = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
+            if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(i.getAction()) || UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(i.getAction())) {
+                UsbDevice d = Build.VERSION.SDK_INT >= 33 ? i.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class)
+                    : i.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                if (d == null || d.getVendorId() != VITURE_VID) return;
+                boolean attached = UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(i.getAction());
+                log(String.format(Locale.US, "USB %s : %04X:%04X", attached ? "rebranché" : "débranché / réinitialisé", d.getVendorId(), d.getProductId()));
+                if (!attached) dropLink();
+                else if (wantConnected) main.postDelayed(() -> requestConnect(), 800);
+                return;
+            }
             if (USB_PERMISSION.equals(i.getAction())) {
                 boolean ok = i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
                 log("Permission USB : " + (ok ? "accordée" : "refusée"));
@@ -71,11 +81,13 @@ public final class LabActivity extends Activity {
         super.onCreate(b);
         usb = getSystemService(UsbManager.class);
         IntentFilter f = new IntentFilter(USB_PERMISSION);
+        f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        f.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(rx, f, Context.RECEIVER_EXPORTED); else registerReceiver(rx, f);
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.0 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.1 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
         dumpUsb();
         dumpDisplays();
@@ -102,7 +114,7 @@ public final class LabActivity extends Activity {
         p.addView(text("Chaque action est notée dans le journal avec son code retour (0 = succès). "
             + "Regarde dans les lunettes ce qui change, puis envoie le journal.", 13, 0xffa9b8c8));
 
-        p.addView(row(btn("1. Connecter", v -> requestConnect()), btn("Lire l'état", v -> info())));
+        p.addView(row(btn("1. Connecter", v -> requestConnect()), btn("Reconnecter", v -> { dropLink(); requestConnect(); }), btn("Lire l'état", v -> info())));
 
         p.addView(section("Mode des lunettes"));
         p.addView(row(btn("Natif (suivi des lunettes)", v -> call("native_set_mode", 1)),
@@ -177,7 +189,19 @@ public final class LabActivity extends Activity {
         return null;
     }
 
+    /** Forget a link that died (the glasses re-enumerate their USB when switching mode). */
+    private void dropLink() {
+        if (!connected && conn == null) return;
+        imuOn = false;
+        main.removeCallbacks(poseTick);
+        if (connected) LabBridge.nDisconnect();
+        if (conn != null) { conn.close(); conn = null; }
+        connected = false;
+        log("Liaison fermée.");
+    }
+
     private void requestConnect() {
+        wantConnected = true;
         if (connected) { log("Déjà connecté."); return; }
         UsbDevice d = findGlasses();
         if (d == null) { log("Lunettes VITURE (VID 35CA) introuvables. Branche les Beast."); dumpUsb(); return; }
@@ -208,11 +232,18 @@ public final class LabActivity extends Activity {
         if (!connected) { log("Connecte d'abord."); return; }
         int r = LabBridge.nCall(op, arg, true);
         log(op + "(" + arg + ") → " + code(r));
+        if ("native_set_mode".equals(op) && r == 0) {
+            log("Changement de mode : les lunettes vont peut-être réinitialiser leur USB, reconnexion automatique…");
+            main.postDelayed(this::checkLink, 2500);
+        }
+        if (r == -5 || r == -3 || r == -2) linkLost();
     }
 
     private void call0(String op) {
         if (!connected) { log("Connecte d'abord."); return; }
-        log(op + "() → " + code(LabBridge.nCall(op, 0, false)));
+        int r = LabBridge.nCall(op, 0, false);
+        log(op + "() → " + code(r));
+        if (r == -5 || r == -3 || r == -2) linkLost();
     }
 
     private void imu(boolean open, int freq) {
@@ -220,8 +251,23 @@ public final class LabActivity extends Activity {
         int r = LabBridge.nImu(open, freq);
         log((open ? "open_imu(pose, fréquence " + freq + ")" : "close_imu") + " → " + code(r));
         imuOn = open && r == 0;
+        if (r == -5 || r == -3 || r == -2) linkLost();
         main.removeCallbacks(poseTick);
         if (imuOn) main.post(poseTick); else poseView.setText("IMU arrêtée");
+    }
+
+    private void linkLost() {
+        log("Liaison USB perdue : reconnexion…");
+        dropLink();
+        main.postDelayed(this::requestConnect, 1000);
+    }
+
+    /** After a mode switch: verify the link still answers, otherwise reconnect. */
+    private void checkLink() {
+        if (!connected) { requestConnect(); return; }
+        int m = LabBridge.nCall("native_get_mode", 0, false);
+        log("Vérification de la liaison : mode = " + code(m));
+        if (m < 0) linkLost();
     }
 
     private static String code(int r) {
@@ -231,6 +277,7 @@ public final class LabActivity extends Activity {
             case -2: return "-2 (USB indisponible)";
             case -3: return "-3 (erreur d'exécution USB)";
             case -4: return "-4 (non supporté / mauvais mode)";
+            case -5: return "-5 (pas de réponse : liaison USB perdue)";
             case -7: return "-7 (refusé par les lunettes)";
             case -10: return "-10 (état invalide)";
             case -1000: return "non connecté";
