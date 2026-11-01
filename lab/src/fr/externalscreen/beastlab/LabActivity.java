@@ -101,7 +101,7 @@ public final class LabActivity extends Activity {
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.4 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.5 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
         java.io.File crash = new java.io.File(getFilesDir(), "last-crash.txt");
         if (crash.exists()) {
@@ -110,6 +110,12 @@ public final class LabActivity extends Activity {
             crash.delete();
         }
         dumpExitReasons();
+        java.io.File dl = new java.io.File(getFilesDir(), "depth-events.txt");
+        if (dl.exists()) {
+            try { log("— ÉTAPES DE LA RECOPIE (session précédente) —\n" + new String(java.nio.file.Files.readAllBytes(dl.toPath()), StandardCharsets.UTF_8)); }
+            catch (Exception ignored) { }
+            dl.delete();
+        }
         dumpUsb();
         dumpDisplays();
         main.post(depthPoll);
@@ -285,10 +291,13 @@ public final class LabActivity extends Activity {
         if (!connected && conn == null) return;
         imuOn = false;
         main.removeCallbacks(poseTick);
-        if (connected) LabBridge.nDisconnect();
+        // Never call into libglasses on a link that died: its USB thread is still
+        // running on the old descriptor and stop/destroy then crash (SIGSEGV seen
+        // in the 1.4 traces). The stale handle is simply abandoned.
         if (conn != null) { conn.close(); conn = null; }
         connected = false;
-        log("Liaison fermée.");
+        LabBridge.nForget();
+        log("Liaison abandonnée (sans appel au SDK).");
     }
 
     private void requestConnect() {

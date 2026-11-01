@@ -78,13 +78,22 @@ public final class DepthService extends Service {
     private volatile boolean frameAvailable;
     private long framesIn, framesOut, statStart;
 
+    static java.io.File eventFile;
+
     static void event(String s) {
-        events.add(new java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(new java.util.Date()) + "  [profondeur] " + s);
+        String line = new java.text.SimpleDateFormat("HH:mm:ss", Locale.US).format(new java.util.Date()) + "  [profondeur] " + s;
+        events.add(line);
+        java.io.File f = eventFile;
+        if (f != null) {
+            // written immediately: survives a crash of the process
+            try (java.io.FileWriter w = new java.io.FileWriter(f, true)) { w.write(line + "\n"); } catch (Exception ignored) { }
+        }
     }
 
     @Override public void onCreate() {
         super.onCreate();
         LabActivity.installCrashRecorder(this);
+        eventFile = new java.io.File(getFilesDir(), "depth-events.txt");
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {

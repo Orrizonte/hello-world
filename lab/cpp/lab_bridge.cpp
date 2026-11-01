@@ -175,6 +175,10 @@ JNIEXPORT jstring JNICALL Java_fr_externalscreen_beastlab_LabBridge_nSdkLog(JNIE
     return env->NewStringUTF(sdkLog.c_str());
 }
 
+JNIEXPORT void JNICALL Java_fr_externalscreen_beastlab_LabBridge_nForget(JNIEnv*, jclass) {
+    handle = nullptr; // leaked on purpose: the SDK thread may still reference it
+}
+
 JNIEXPORT void JNICALL Java_fr_externalscreen_beastlab_LabBridge_nDisconnect(JNIEnv*, jclass) {
     if (!handle) return;
     using HI = int (*)(H);

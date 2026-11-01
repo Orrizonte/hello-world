@@ -20,4 +20,6 @@ final class LabBridge {
     static native float[] nPose();
     static native String nSdkLog();
     static native void nDisconnect();
+    /** Forget the native handle without touching the SDK (dead USB link). */
+    static native void nForget();
 }
