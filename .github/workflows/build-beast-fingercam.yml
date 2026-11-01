@@ -33,6 +33,7 @@ jobs:
             git -C deps/libuvc checkout --quiet 448d78b9aa4f54172c1ca5b5d1b4a6b9b93f7957
             bash scripts/prepare-mediapipe.sh
             bash scripts/build-apk.sh deps/libusb deps/libuvc
+            bash scripts/build-lab.sh
             mkdir -p bench/out
             P=app/src/main/java/fr/externalscreen/beastfingerdiagnostic
             javac -d bench/out $P/ScreenTracker.java $P/Homography.java $P/OneEuroFilter.java $P/Contours.java \
@@ -48,6 +49,7 @@ jobs:
           mkdir -p publish
           cp build.log publish/ 2>/dev/null || echo "no log" > publish/build.log
           cp manual-build/apk/beast-fingers-*-unsigned.apk publish/ 2>/dev/null || true
+          cp manual-build/lab/apk/beast-lab-unsigned.apk publish/ 2>/dev/null || true
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" publish/ 2>/dev/null || true
           echo "${{ github.sha }} run ${{ github.run_id }}" > publish/SOURCE.txt
           cd publish
