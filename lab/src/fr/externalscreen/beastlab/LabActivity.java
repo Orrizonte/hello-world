@@ -101,7 +101,7 @@ public final class LabActivity extends Activity {
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.5 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.6 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
         java.io.File crash = new java.io.File(getFilesDir(), "last-crash.txt");
         if (crash.exists()) {

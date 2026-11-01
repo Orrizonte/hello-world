@@ -196,8 +196,15 @@ public final class DepthService extends Service {
                 if (eglDisplay == EGL14.EGL_NO_DISPLAY) initEgl();
                 if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface);
                 eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, config, out, new int[]{EGL14.EGL_NONE}, 0);
-                EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext);
-                if (program == 0) initScene();
+                if (eglSurface == null || eglSurface == EGL14.EGL_NO_SURFACE)
+                    throw new RuntimeException("surface EGL refusée (0x" + Integer.toHexString(EGL14.eglGetError()) + ")");
+                if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext))
+                    throw new RuntimeException("eglMakeCurrent (0x" + Integer.toHexString(EGL14.eglGetError()) + ")");
+                if (program == 0) {
+                    String r = GLES20.glGetString(GLES20.GL_RENDERER); // only valid with a current context
+                    event("GPU : " + (r == null ? "?" : r));
+                    initScene();
+                }
                 statStart = SystemClock.elapsedRealtime();
                 gl.post(renderLoop);
             } catch (Throwable e) { event("GL : " + e); for (StackTraceElement el : e.getStackTrace()) { event("   at " + el); if (el.getClassName().startsWith("android.os.Looper")) break; } }
@@ -213,11 +220,14 @@ public final class DepthService extends Service {
         int[] attrs = {EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8,
             EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT, EGL14.EGL_NONE};
         EGLConfig[] cfg = new EGLConfig[1]; int[] n = new int[1];
-        EGL14.eglChooseConfig(eglDisplay, attrs, 0, cfg, 0, 1, n, 0);
+        if (!EGL14.eglChooseConfig(eglDisplay, attrs, 0, cfg, 0, 1, n, 0) || n[0] < 1 || cfg[0] == null)
+            throw new RuntimeException("aucune configuration EGL (erreur 0x" + Integer.toHexString(EGL14.eglGetError()) + ")");
         config = cfg[0];
         eglContext = EGL14.eglCreateContext(eglDisplay, config, EGL14.EGL_NO_CONTEXT,
             new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE}, 0);
-        event("EGL prêt (" + GLES20.glGetString(GLES20.GL_RENDERER) + ")");
+        if (eglContext == null || eglContext == EGL14.EGL_NO_CONTEXT)
+            throw new RuntimeException("contexte EGL refusé (0x" + Integer.toHexString(EGL14.eglGetError()) + ")");
+        event("EGL initialisé " + v[0] + "." + v[1]);
     }
 
     private static final String VS = "attribute vec2 aPos; attribute vec2 aTex; uniform mat4 uMvp; uniform mat4 uSt; varying vec2 vTex;"
