@@ -9,6 +9,9 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
+#include <ctime>
+#include <cmath>
 
 #define TAG "BeastLab"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -25,6 +28,41 @@ std::string sdkLog;
 std::mutex poseMx;
 float pose[7] = {0};
 uint64_t poseCount = 0;
+
+// ---- 6DoF feasibility test: raw IMU + camera recording
+std::mutex senMx;
+FILE* imuFile = nullptr;
+uint64_t imuN = 0, imuFirstTs = 0, imuLastTs = 0, imuFirstArr = 0, imuLastArr = 0, imuMaxGapNs = 0;
+double accSum[3] = {0}, gyrSum[3] = {0}, gyrSq[3] = {0};
+float imuLast[10] = {0};
+H cam = nullptr;
+std::vector<uint8_t> camBuf; uint64_t camTs = 0, camArr = 0, camSeq = 0, camW = 0, camH = 0, camN = 0, camTaken = 0, camFirstArr = 0, camLastArr = 0, camMaxGapNs = 0;
+bool camFresh = false;
+
+uint64_t nowNs() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return uint64_t(t.tv_sec) * 1000000000ull + t.tv_nsec; }
+
+void imuRawCb(float* d, uint64_t ts, uint64_t vsync) {
+    uint64_t a = nowNs();
+    std::lock_guard<std::mutex> lk(senMx);
+    if (imuN == 0) { imuFirstTs = ts; imuFirstArr = a; }
+    else if (a - imuLastArr > imuMaxGapNs) imuMaxGapNs = a - imuLastArr;
+    imuLastTs = ts; imuLastArr = a; imuN++;
+    memcpy(imuLast, d, sizeof imuLast);
+    for (int i = 0; i < 3; ++i) { gyrSum[i] += d[i]; gyrSq[i] += double(d[i]) * d[i]; accSum[i] += d[3 + i]; }
+    if (imuFile) fprintf(imuFile, "%llu,%llu,%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.4f,%.4f,%.4f,%.2f\n",
+        (unsigned long long) ts, (unsigned long long) vsync, (unsigned long long) a,
+        d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9]);
+}
+
+struct CamFrame { uint8_t* data; uint32_t size, width, height; int format; uint64_t timestamp; uint32_t sequence; };
+void camCb(const CamFrame* f, void*) {
+    uint64_t a = nowNs();
+    std::lock_guard<std::mutex> lk(senMx);
+    if (camN == 0) camFirstArr = a; else if (a - camLastArr > camMaxGapNs) camMaxGapNs = a - camLastArr;
+    camLastArr = a; camN++;
+    camBuf.assign(f->data, f->data + f->size);
+    camTs = f->timestamp; camArr = a; camSeq = f->sequence; camW = f->width; camH = f->height; camFresh = true;
+}
 
 template <typename T> T sym(const char* n) { return lib ? reinterpret_cast<T>(dlsym(lib, n)) : nullptr; }
 
@@ -187,5 +225,96 @@ JNIEXPORT void JNICALL Java_fr_externalscreen_beastlab_LabBridge_nDisconnect(JNI
     if (auto f = sym<HI>("xr_device_provider_shutdown")) f(handle);
     if (auto f = sym<HV>("xr_device_provider_destroy")) f(handle);
     handle = nullptr;
+}
+
+// freqs supported for raw IMU on this product, as a string
+JNIEXPORT jstring JNICALL Java_fr_externalscreen_beastlab_LabBridge_nImuFreqs(JNIEnv* env, jclass, jint pid) {
+    std::string o; std::string err; load(err);
+    using F = int (*)(int, int, int);
+    auto f = sym<F>("xr_device_provider_is_product_support_imu_frequency");
+    const char* n[] = {"60", "90", "120", "240", "500", "1000"};
+    for (int i = 0; i < 6; ++i) o += std::string(n[i]) + " Hz : " + (f ? std::to_string(f(pid, 0, i)) : "?") + "  ";
+    return env->NewStringUTF(o.c_str());
+}
+
+JNIEXPORT jstring JNICALL Java_fr_externalscreen_beastlab_LabBridge_nSensorStart(JNIEnv* env, jclass, jstring dir, jint freq, jint camFd) {
+    std::string o;
+    {
+        std::lock_guard<std::mutex> lk(senMx);
+        imuN = 0; imuMaxGapNs = 0; camN = 0; camTaken = 0; camMaxGapNs = 0; camFresh = false;
+        for (int i = 0; i < 3; ++i) accSum[i] = gyrSum[i] = gyrSq[i] = 0;
+        const char* d = env->GetStringUTFChars(dir, nullptr);
+        std::string path = std::string(d) + "/imu.csv";
+        env->ReleaseStringUTFChars(dir, d);
+        imuFile = fopen(path.c_str(), "w");
+        if (imuFile) fprintf(imuFile, "ts_device,vsync,arrival_monotonic_ns,gx,gy,gz,ax,ay,az,mx,my,mz,temp\n");
+        o += imuFile ? "fichier IMU ouvert\n" : "fichier IMU impossible\n";
+    }
+    if (handle) {
+        using Reg = int (*)(H, void (*)(float*, uint64_t, uint64_t));
+        using Open = int (*)(H, uint8_t, uint8_t);
+        auto r = sym<Reg>("xr_device_provider_register_imu_raw_callback");
+        auto op = sym<Open>("xr_device_provider_open_imu");
+        o += fmt("register_imu_raw_callback : %d\n", r ? r(handle, imuRawCb) : -1001);
+        o += fmt("open_imu(raw) : %d\n", op ? op(handle, 0 /*RAW*/, static_cast<uint8_t>(freq)) : -1001);
+    } else o += "lunettes non connectées : pas d'IMU\n";
+    if (camFd >= 0) {
+        using Create = H (*)(int, int, int);
+        using Start = int (*)(H, void (*)(const CamFrame*, void*), void*);
+        auto c = sym<Create>("xr_camera_provider_create");
+        auto st = sym<Start>("xr_camera_provider_start");
+        if (!cam && c) cam = c(0x0C45, 0x6368, camFd);
+        o += std::string("caméra create : ") + (cam ? "ok" : "ÉCHEC") + "\n";
+        if (cam && st) o += fmt("caméra start : %d\n", st(cam, camCb, nullptr));
+    } else o += "caméra non ouverte\n";
+    return env->NewStringUTF(o.c_str());
+}
+
+JNIEXPORT jstring JNICALL Java_fr_externalscreen_beastlab_LabBridge_nSensorStats(JNIEnv* env, jclass) {
+    std::lock_guard<std::mutex> lk(senMx);
+    char b[900];
+    double durA = imuN > 1 ? (imuLastArr - imuFirstArr) / 1e9 : 0, durC = camN > 1 ? (camLastArr - camFirstArr) / 1e9 : 0;
+    double n = imuN ? double(imuN) : 1;
+    double gStd = 0; for (int i = 0; i < 3; ++i) { double m = gyrSum[i] / n; gStd += gyrSq[i] / n - m * m; }
+    double am = std::sqrt((accSum[0] / n) * (accSum[0] / n) + (accSum[1] / n) * (accSum[1] / n) + (accSum[2] / n) * (accSum[2] / n));
+    snprintf(b, sizeof b,
+        "IMU : %llu échantillons, %.0f /s, plus grand trou %.1f ms, horloge appareil %llu→%llu\n"
+        "   dernier gyro %.4f %.4f %.4f | accel %.3f %.3f %.3f (|moy| %.3f) | magnéto %.1f %.1f %.1f | temp %.1f | bruit gyro %.4f\n"
+        "Caméra : %llu images, %.1f img/s, plus grand trou %.0f ms, %llux%llu, dernier horodatage %llu, séq %llu, images enregistrées %llu",
+        (unsigned long long) imuN, durA > 0 ? imuN / durA : 0, imuMaxGapNs / 1e6, (unsigned long long) imuFirstTs, (unsigned long long) imuLastTs,
+        imuLast[0], imuLast[1], imuLast[2], imuLast[3], imuLast[4], imuLast[5], am, imuLast[6], imuLast[7], imuLast[8], imuLast[9], std::sqrt(gStd > 0 ? gStd : 0),
+        (unsigned long long) camN, durC > 0 ? camN / durC : 0, camMaxGapNs / 1e6, (unsigned long long) camW, (unsigned long long) camH,
+        (unsigned long long) camTs, (unsigned long long) camSeq, (unsigned long long) camTaken);
+    return env->NewStringUTF(b);
+}
+
+// latest unseen camera frame: 40-byte header (ts, arrival, seq, w, h as int64 LE) + MJPEG
+JNIEXPORT jbyteArray JNICALL Java_fr_externalscreen_beastlab_LabBridge_nCamTake(JNIEnv* env, jclass) {
+    std::lock_guard<std::mutex> lk(senMx);
+    if (!camFresh) return nullptr;
+    camFresh = false; camTaken++;
+    jbyteArray a = env->NewByteArray(40 + (jsize) camBuf.size());
+    int64_t h[5] = {(int64_t) camTs, (int64_t) camArr, (int64_t) camSeq, (int64_t) camW, (int64_t) camH};
+    env->SetByteArrayRegion(a, 0, 40, reinterpret_cast<jbyte*>(h));
+    env->SetByteArrayRegion(a, 40, (jsize) camBuf.size(), reinterpret_cast<jbyte*>(camBuf.data()));
+    return a;
+}
+
+JNIEXPORT jstring JNICALL Java_fr_externalscreen_beastlab_LabBridge_nSensorStop(JNIEnv* env, jclass, jboolean linkAlive) {
+    std::string o;
+    if (handle && linkAlive) {
+        using Close = int (*)(H, uint8_t);
+        if (auto c = sym<Close>("xr_device_provider_close_imu")) o += fmt("close_imu(raw) : %d\n", c(handle, 0));
+    }
+    if (cam) {
+        using HI = int (*)(H);
+        using HV = void (*)(H);
+        if (auto f = sym<HI>("xr_camera_provider_stop")) o += fmt("caméra stop : %d\n", f(cam));
+        if (auto f = sym<HV>("xr_camera_provider_destroy")) f(cam);
+        cam = nullptr;
+    }
+    std::lock_guard<std::mutex> lk(senMx);
+    if (imuFile) { fclose(imuFile); imuFile = nullptr; }
+    return env->NewStringUTF(o.c_str());
 }
 }

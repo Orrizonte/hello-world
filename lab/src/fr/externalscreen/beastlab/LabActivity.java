@@ -15,6 +15,8 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.graphics.BitmapFactory;
+import android.os.SystemClock;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -44,7 +46,10 @@ public final class LabActivity extends Activity {
     private static final int REQ_CAPTURE = 41;
     private UsbManager usb;
     private UsbDeviceConnection conn;
-    private boolean connected, imuOn, wantConnected;
+    private boolean connected, imuOn, wantConnected, pendingSensor, sensorRunning;
+    private static final String CAM_PERMISSION = "fr.externalscreen.beastlab.CAM_PERMISSION";
+    private UsbDeviceConnection camConn;
+    private TextView sensorView;
     private final String[] stateNames = {"luminosité", "volume", "mode d'affichage", "film électrochrome", "DoF natif",
         "porté", "distance", "taille"};
 
@@ -58,6 +63,12 @@ public final class LabActivity extends Activity {
                 log(String.format(Locale.US, "USB %s : %04X:%04X", attached ? "rebranché" : "débranché / réinitialisé", d.getVendorId(), d.getProductId()));
                 if (!attached) dropLink();
                 else if (wantConnected) main.postDelayed(() -> requestConnect(), 800);
+                return;
+            }
+            if (CAM_PERMISSION.equals(i.getAction())) {
+                boolean ok = i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+                log("Permission caméra : " + (ok ? "accordée" : "refusée"));
+                if (ok) sensorRun(); else pendingSensor = false;
                 return;
             }
             if (USB_PERMISSION.equals(i.getAction())) {
@@ -95,13 +106,14 @@ public final class LabActivity extends Activity {
         installCrashRecorder(this);
         usb = getSystemService(UsbManager.class);
         IntentFilter f = new IntentFilter(USB_PERMISSION);
+        f.addAction(CAM_PERMISSION);
         f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         f.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(rx, f, Context.RECEIVER_EXPORTED); else registerReceiver(rx, f);
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.7 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.8 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
         java.io.File crash = new java.io.File(getFilesDir(), "last-crash.txt");
         if (crash.exists()) {
@@ -181,6 +193,15 @@ public final class LabActivity extends Activity {
         p.addView(pattern);
         depthStats = text("", 12, 0xff9be7b4);
         p.addView(depthStats);
+
+        p.addView(section("6DoF maison — étape 1 : test des capteurs"));
+        p.addView(text("Enregistre 20 s de capteurs bruts (IMU + caméra des Beast) pour vérifier qu'un 6DoF maison est faisable. "
+            + "Les lunettes passent seules en Bypass pendant le test, puis reviennent en Natif. "
+            + "Pendant les 20 s : regarde autour de toi dans une pièce éclairée, tourne la tête, avance et recule d'un pas, penche-toi. "
+            + "À la fin, un fichier .zip est enregistré dans Téléchargements/BeastLab : envoie-le moi avec le journal.", 12, 0xffa9b8c8));
+        p.addView(btn("Lancer le test capteurs (20 s)", v -> sensorTest()));
+        sensorView = text("", 12, 0xff9be7b4);
+        p.addView(sensorView);
 
         p.addView(section("Orientation de la tête (IMU du SDK)"));
         p.addView(row(btn("IMU 60 Hz", v -> imu(true, 0)), btn("IMU 500 Hz", v -> imu(true, 4)), btn("Arrêter IMU", v -> imu(false, 0))));
@@ -326,6 +347,7 @@ public final class LabActivity extends Activity {
         log(r);
         connected = true;
         info();
+        if (pendingSensor && !sensorRunning) main.postDelayed(this::sensorTest, 1500);
     }
 
     private void info() {
@@ -359,6 +381,140 @@ public final class LabActivity extends Activity {
         if (r == -5 || r == -3 || r == -2) linkLost();
         main.removeCallbacks(poseTick);
         if (imuOn) main.post(poseTick); else poseView.setText("IMU arrêtée");
+    }
+
+    // ------------------------------------------------------------------ 6DoF step 1: sensor recording
+    private static final int CAM_VID = 0x0C45, CAM_PID = 0x6368;
+
+    private void sensorTest() {
+        if (sensorRunning) { log("Test capteurs déjà en cours."); return; }
+        pendingSensor = true;
+        if (!connected) { log("Connexion aux lunettes d'abord…"); requestConnect(); return; }
+        int mode = LabBridge.nCall("native_get_mode", 0, false);
+        log("Mode actuel : " + code(mode));
+        if (mode == 1) {
+            log("Passage en Bypass (l'IMU brute n'est accessible qu'en Bypass) ; le test reprendra seul après la reconnexion.");
+            call("native_set_mode", 0);
+            return;
+        }
+        UsbDevice cam = null;
+        for (UsbDevice d : usb.getDeviceList().values()) if (d.getVendorId() == CAM_VID && d.getProductId() == CAM_PID) cam = d;
+        if (cam == null) { log("Caméra des Beast (0C45:6368) introuvable : test IMU seul."); sensorRun(); return; }
+        if (usb.hasPermission(cam)) { sensorRun(); return; }
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
+        usb.requestPermission(cam, PendingIntent.getBroadcast(this, 1, new Intent(CAM_PERMISSION).setPackage(getPackageName()), flags));
+        log("Accepte l'accès USB à la caméra…");
+    }
+
+    private void sensorRun() {
+        if (sensorRunning) return;
+        pendingSensor = false;
+        sensorRunning = true;
+        UsbDevice glasses = findGlasses();
+        int pid = glasses != null ? glasses.getProductId() : 0x1211;
+        String freqs = LabBridge.nImuFreqs(pid);
+        log("Fréquences IMU brute supportées (1 = oui) : " + freqs);
+        int freq = 0;
+        for (int i = 0; i < 6; i++) if (freqs.contains(new String[]{"60", "90", "120", "240", "500", "1000"}[i] + " Hz : 1")) freq = i;
+        int camFd = -1;
+        for (UsbDevice d : usb.getDeviceList().values()) if (d.getVendorId() == CAM_VID && d.getProductId() == CAM_PID && usb.hasPermission(d)) {
+            camConn = usb.openDevice(d);
+            if (camConn != null) camFd = camConn.getFileDescriptor();
+        }
+        final String stamp = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
+        final java.io.File dir = new java.io.File(getCacheDir(), "capteurs-" + stamp);
+        final java.io.File frames = new java.io.File(dir, "frames");
+        frames.mkdirs();
+        log("Démarrage : IMU fréquence " + freq + ", caméra fd " + camFd + "\n" + LabBridge.nSensorStart(dir.getAbsolutePath(), freq, camFd));
+        log("ENREGISTREMENT 20 s : bouge la tête maintenant (regarde autour, avance / recule d'un pas).");
+        final int f0 = freq;
+        new Thread(() -> {
+            long end = SystemClock.elapsedRealtime() + 20000, nextUi = 0;
+            int saved = 0; boolean fullSaved = false; long jpegBytes = 0;
+            StringBuilder csv = new StringBuilder("ts_device,arrival_monotonic_ns,seq,width,height,file\n");
+            BitmapFactory.Options o = new BitmapFactory.Options(); o.inSampleSize = 2;
+            while (SystemClock.elapsedRealtime() < end) {
+                byte[] b = LabBridge.nCamTake();
+                if (b == null) { SystemClock.sleep(4); }
+                else try {
+                    java.nio.ByteBuffer h = java.nio.ByteBuffer.wrap(b, 0, 40).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    long ts = h.getLong(), arr = h.getLong(), seq = h.getLong(), w = h.getLong(), hh = h.getLong();
+                    if (!fullSaved) {
+                        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(new java.io.File(dir, "pleine-resolution.jpg"))) { fo.write(b, 40, b.length - 40); }
+                        fullSaved = true;
+                    }
+                    jpegBytes += b.length - 40;
+                    android.graphics.Bitmap bm = BitmapFactory.decodeByteArray(b, 40, b.length - 40, o);
+                    if (bm != null) {
+                        String name = String.format(Locale.US, "%019d.jpg", arr);
+                        try (java.io.FileOutputStream fo = new java.io.FileOutputStream(new java.io.File(frames, name))) {
+                            bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, fo);
+                        }
+                        bm.recycle();
+                        csv.append(ts).append(',').append(arr).append(',').append(seq).append(',').append(w).append(',').append(hh).append(',').append(name).append('\n');
+                        saved++;
+                    }
+                } catch (Exception e) { final String m = e.toString(); main.post(() -> log("image : " + m)); }
+                long now = SystemClock.elapsedRealtime();
+                if (now >= nextUi) {
+                    nextUi = now + 1000;
+                    final String st = "Reste " + (end - now) / 1000 + " s — images enregistrées : " + saved + "\n" + LabBridge.nSensorStats();
+                    main.post(() -> sensorView.setText(st));
+                }
+            }
+            final long avgJpeg = saved > 0 ? jpegBytes / saved : 0;
+            final int nSaved = saved;
+            final StringBuilder fcsv = csv;
+            main.post(() -> sensorFinish(dir, stamp, fcsv, nSaved, avgJpeg, f0));
+        }, "sensor-rec").start();
+    }
+
+    private void sensorFinish(java.io.File dir, String stamp, StringBuilder csv, int saved, long avgJpeg, int freq) {
+        String stats = LabBridge.nSensorStats();
+        log("FIN DE L'ENREGISTREMENT\n" + stats + "\nimages décodées et enregistrées : " + saved + ", taille MJPEG moyenne " + avgJpeg / 1024 + " Ko");
+        log(LabBridge.nSensorStop(connected));
+        if (camConn != null) { camConn.close(); camConn = null; }
+        sensorRunning = false;
+        try {
+            java.nio.file.Files.write(new java.io.File(dir, "frames.csv").toPath(), csv.toString().getBytes(StandardCharsets.UTF_8));
+            java.nio.file.Files.write(new java.io.File(dir, "info.txt").toPath(), (Build.MANUFACTURER + " " + Build.MODEL + " Android " + Build.VERSION.RELEASE
+                + "\nfréquence IMU demandée (index) : " + freq + "\n" + stats + "\n\n" + log).getBytes(StandardCharsets.UTF_8));
+            String name = "capteurs-" + stamp + ".zip";
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/zip");
+            cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BeastLab");
+            android.net.Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            long total = 0;
+            try (java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(getContentResolver().openOutputStream(uri))) {
+                java.util.ArrayDeque<java.io.File> q = new java.util.ArrayDeque<>(); q.add(dir);
+                while (!q.isEmpty()) {
+                    java.io.File f = q.poll();
+                    java.io.File[] kids = f.listFiles();
+                    if (kids == null) continue;
+                    for (java.io.File k : kids) {
+                        if (k.isDirectory()) { q.add(k); continue; }
+                        String rel = dir.toPath().relativize(k.toPath()).toString();
+                        z.putNextEntry(new java.util.zip.ZipEntry(rel));
+                        byte[] data = java.nio.file.Files.readAllBytes(k.toPath());
+                        z.write(data); z.closeEntry(); total += data.length;
+                    }
+                }
+            }
+            log("Fichier prêt : Téléchargements/BeastLab/" + name + " (" + total / (1024 * 1024) + " Mo). Envoie-le moi avec le journal.");
+            deleteTree(dir);
+        } catch (Exception e) { log("Création du zip impossible : " + e); }
+        sensorView.setText("Test terminé.");
+        if (connected) {
+            log("Retour en mode Natif (suivi des lunettes)…");
+            call("native_set_mode", 1);
+        }
+    }
+
+    private static void deleteTree(java.io.File f) {
+        java.io.File[] k = f.listFiles();
+        if (k != null) for (java.io.File c : k) deleteTree(c);
+        f.delete();
     }
 
     private void linkLost() {

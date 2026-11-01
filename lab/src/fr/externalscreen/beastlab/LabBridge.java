@@ -22,4 +22,9 @@ final class LabBridge {
     static native void nDisconnect();
     /** Forget the native handle without touching the SDK (dead USB link). */
     static native void nForget();
+    static native String nImuFreqs(int pid);
+    static native String nSensorStart(String dir, int freq, int camFd);
+    static native String nSensorStats();
+    static native byte[] nCamTake();
+    static native String nSensorStop(boolean linkAlive);
 }
