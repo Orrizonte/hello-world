@@ -1,0 +1,112 @@
+++ command -v sdkmanager
++ SDKM=/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager
++ /usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
++ mkdir -p deps
++ git clone --quiet https://github.com/libusb/libusb deps/libusb
++ git -C deps/libusb checkout --quiet d52e355daa09f17ce64819122cb067b8a2ee0d4b
++ git clone --quiet https://github.com/libuvc/libuvc deps/libuvc
++ git -C deps/libuvc checkout --quiet 448d78b9aa4f54172c1ca5b5d1b4a6b9b93f7957
++ bash scripts/prepare-mediapipe.sh
+Fetching com.google.guava:guava:27.0.1-android
+Fetching com.google.guava:failureaccess:1.0.1
+Fetching com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
+Fetching com.google.protobuf:protobuf-javalite:4.26.1
+Fetching com.google.flogger:flogger:0.6
+Fetching com.google.flogger:flogger-system-backend:0.6
+Fetching com.google.code.findbugs:jsr305:3.0.2
+Fetching org.checkerframework:checker-qual:2.5.2
+Fetching com.google.errorprone:error_prone_annotations:2.2.0
+Fetching com.google.j2objc:j2objc-annotations:1.1
+Fetching javax.inject:javax.inject:1
+Fetching org.checkerframework:checker-compat-qual:2.5.5
+Google jar: firebase-encoders
+Google jar: firebase-encoders-proto
+Verified bundled: javax/inject/Provider.class
+Verified bundled: com/google/firebase/encoders/DataEncoder.class
+Verified bundled: com/google/firebase/encoders/json/JsonDataEncoderBuilder.class
+Verified bundled: com/google/firebase/encoders/proto/ProtobufEncoder.class
+/home/runner/work/hello-world/hello-world/manual-build/mediapipe/asset/:
+total 7.5M
+-rw-r--r-- 1 runner runner  361 Nov  1 17:33 MEDIAPIPE-LICENSE-NOTICE.txt
+-rw-r--r-- 1 runner runner 7.5M Nov  1 17:33 hand_landmarker.task
+
+/home/runner/work/hello-world/hello-world/manual-build/mediapipe/jar/:
+total 6.0M
+-rw-r--r-- 1 runner runner 5.8K Nov  1 17:33 checker-compat-qual-2.5.5.jar
+-rw-r--r-- 1 runner runner 189K Nov  1 17:33 checker-qual-2.5.2.jar
+-rw-r--r-- 1 runner runner  14K Nov  1 17:33 error_prone_annotations-2.2.0.jar
+-rw-r--r-- 1 runner runner 4.6K Nov  1 17:33 failureaccess-1.0.1.jar
+-rw-r--r-- 1 runner runner  18K Nov  1 17:33 firebase-encoders-16.1.0.jar
+-rw-r--r-- 1 runner runner  31K Nov  1 17:33 firebase-encoders-json.jar
+-rw-r--r-- 1 runner runner  39K Nov  1 17:33 firebase-encoders-proto-16.0.0.jar
+-rw-r--r-- 1 runner runner 169K Nov  1 17:33 flogger-0.6.jar
+-rw-r--r-- 1 runner runner  17K Nov  1 17:33 flogger-system-backend-0.6.jar
+-rw-r--r-- 1 runner runner 2.5M Nov  1 17:33 guava-27.0.1-android.jar
+-rw-r--r-- 1 runner runner 8.6K Nov  1 17:33 j2objc-annotations-1.1.jar
+-rw-r--r-- 1 runner runner 2.5K Nov  1 17:33 javax.inject-1.jar
+-rw-r--r-- 1 runner runner  20K Nov  1 17:33 jsr305-3.0.2.jar
+-rw-r--r-- 1 runner runner 2.2K Nov  1 17:33 listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
+-rw-r--r-- 1 runner runner 698K Nov  1 17:33 protobuf-javalite-4.26.1.jar
+-rw-r--r-- 1 runner runner 1.4M Nov  1 17:33 tasks-core.jar
+-rw-r--r-- 1 runner runner 246K Nov  1 17:33 tasks-vision.jar
+-rw-r--r-- 1 runner runner  12K Nov  1 17:33 transport-api.jar
+-rw-r--r-- 1 runner runner 134K Nov  1 17:33 transport-backend-cct.jar
+-rw-r--r-- 1 runner runner 476K Nov  1 17:33 transport-runtime.jar
+
+/home/runner/work/hello-world/hello-world/manual-build/mediapipe/native/:
+total 9.9M
+-rw-r--r-- 1 runner runner 9.9M Nov  1 17:33 libmediapipe_tasks_vision_jni.so
++ bash scripts/build-apk.sh deps/libusb deps/libuvc
+=== native: JNI bridge + libuvc + libusb (arm64-v8a) ===
+native bridge: /home/runner/work/hello-world/hello-world/manual-build/native/libbeast_cam_bridge.so (777200 bytes)
+  0x0000000000000001 (NEEDED)       Shared library: [liblog.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libdl.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libm.so]
+  0x0000000000000001 (NEEDED)       Shared library: [libc.so]
+=== resources ===
+=== java ===
+Note: app/src/main/java/fr/externalscreen/beastfingerdiagnostic/FingerService.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+=== package ===
+unaligned APK 14725095
+=== done: /home/runner/work/hello-world/hello-world/manual-build/apk/beast-fingers-0.10.5-unsigned.apk ===
++ bash scripts/build-lab.sh
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+=== lab done: /home/runner/work/hello-world/hello-world/manual-build/lab/apk/beast-lab-unsigned.apk ===
+=== sensor done: /home/runner/work/hello-world/hello-world/manual-build/lab/apk/beast-6dof-test-unsigned.apk ===
++ mkdir -p bench/out
++ P=app/src/main/java/fr/externalscreen/beastfingerdiagnostic
++ javac -d bench/out app/src/main/java/fr/externalscreen/beastfingerdiagnostic/ScreenTracker.java app/src/main/java/fr/externalscreen/beastfingerdiagnostic/Homography.java app/src/main/java/fr/externalscreen/beastfingerdiagnostic/OneEuroFilter.java app/src/main/java/fr/externalscreen/beastfingerdiagnostic/Contours.java app/src/main/java/fr/externalscreen/beastfingerdiagnostic/FingerSegmenter.java app/src/main/java/fr/externalscreen/beastfingerdiagnostic/FrameProcessor.java tools/SyntheticBench.java
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench early
++ tail -1
+SCENARIO early: screen 90/90, mean max-corner err 0.17 px, mean IoU 0.939, 10.2 ms/frame
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench early-frame
++ tail -1
+SCENARIO early-frame: screen 85/90, mean max-corner err 0.25 px, mean IoU 0.810, 19.9 ms/frame
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench early-dark-frame-small
++ tail -1
+SCENARIO early-dark-frame-small: screen 85/90, mean max-corner err 0.24 px, mean IoU 0.789, 20.0 ms/frame
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench early-bright-frame
++ tail -1
+SCENARIO early-bright-frame: screen 85/90, mean max-corner err 0.37 px, mean IoU 0.770, 19.6 ms/frame
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench early-bright-frame-small-fast
++ tail -1
+SCENARIO early-bright-frame-small-fast: screen 81/90, mean max-corner err 0.30 px, mean IoU 0.833, 19.5 ms/frame
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench early-frame-far
++ tail -1
+SCENARIO early-frame-far: screen 85/90, mean max-corner err 0.26 px, mean IoU 0.819, 19.3 ms/frame
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench early-dark-frame-near
++ tail -1
+SCENARIO early-dark-frame-near: screen 85/90, mean max-corner err 20.14 px, mean IoU 0.551, 19.5 ms/frame
++ for s in early early-frame early-dark-frame-small early-bright-frame early-bright-frame-small-fast early-frame-far early-dark-frame-near late-nolm
++ java -Djava.awt.headless=true -cp bench/out SyntheticBench late-nolm
++ tail -1
+SCENARIO late-nolm: screen 90/90, mean max-corner err 0.17 px, mean IoU 0.952, 9.9 ms/frame
