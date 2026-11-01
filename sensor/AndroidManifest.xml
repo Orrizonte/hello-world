@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="fr.externalscreen.beastsensors"
+          android:versionCode="1" android:versionName="1.0">
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
+    <application android:label="Beast 6DoF Test"
+                 android:icon="@android:drawable/ic_menu_compass"
+                 android:theme="@android:style/Theme.Material.NoActionBar"
+                 android:extractNativeLibs="true"
+                 android:allowBackup="false">
+        <activity android:name="fr.externalscreen.beastlab.SensorActivity" android:exported="true"
+                  android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

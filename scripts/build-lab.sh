@@ -25,3 +25,16 @@ with zipfile.ZipFile(o/'apk/unaligned.apk', 'a') as z:
 PY
 "$BT/zipalign" -f -p 4 "$OUT/apk/unaligned.apk" "$OUT/apk/beast-lab-unsigned.apk"
 echo "=== lab done: $OUT/apk/beast-lab-unsigned.apk ==="
+
+# Beast 6DoF Test: same code and native bridge, its own manifest (one-screen app)
+"$BT/aapt2" link -I "$JAR" --manifest sensor/AndroidManifest.xml --min-sdk-version 26 --target-sdk-version 35 -o "$OUT/apk/sensor-base.apk"
+python3 - "$OUT" <<'PY'
+import sys, zipfile, shutil, pathlib
+o = pathlib.Path(sys.argv[1])
+shutil.copy(o/'apk/sensor-base.apk', o/'apk/sensor-unaligned.apk')
+with zipfile.ZipFile(o/'apk/sensor-unaligned.apk', 'a') as z:
+    z.write(o/'dex/classes.dex', 'classes.dex', compress_type=zipfile.ZIP_DEFLATED)
+    z.write(o/'libbeast_lab.so', 'lib/arm64-v8a/libbeast_lab.so', compress_type=zipfile.ZIP_DEFLATED)
+PY
+"$BT/zipalign" -f -p 4 "$OUT/apk/sensor-unaligned.apk" "$OUT/apk/beast-6dof-test-unsigned.apk"
+echo "=== sensor done: $OUT/apk/beast-6dof-test-unsigned.apk ==="

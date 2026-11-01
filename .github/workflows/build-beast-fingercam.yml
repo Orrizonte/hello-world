@@ -50,6 +50,7 @@ jobs:
           cp build.log publish/ 2>/dev/null || echo "no log" > publish/build.log
           cp manual-build/apk/beast-fingers-*-unsigned.apk publish/ 2>/dev/null || true
           cp manual-build/lab/apk/beast-lab-unsigned.apk publish/ 2>/dev/null || true
+          cp manual-build/lab/apk/beast-6dof-test-unsigned.apk publish/ 2>/dev/null || true
           cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" publish/ 2>/dev/null || true
           echo "${{ github.sha }} run ${{ github.run_id }}" > publish/SOURCE.txt
           cd publish
