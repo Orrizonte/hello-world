@@ -101,7 +101,7 @@ public final class LabActivity extends Activity {
         LabBridge.listener = (id, v) -> main.post(() ->
             log("ÉVÉNEMENT lunettes : " + (id >= 0 && id < stateNames.length ? stateNames[id] : "id " + id) + " = " + v));
         buildUi();
-        log("Beast Lab 1.6 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
+        log("Beast Lab 1.7 — Android " + Build.VERSION.RELEASE + " — " + Build.MANUFACTURER + " " + Build.MODEL);
         log(LabBridge.LOAD_ERROR == null ? "SDK VITURE chargé" : "ERREUR chargement : " + LabBridge.LOAD_ERROR);
         java.io.File crash = new java.io.File(getFilesDir(), "last-crash.txt");
         if (crash.exists()) {
@@ -236,6 +236,11 @@ public final class LabActivity extends Activity {
         }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 3);
+        if (DepthService.instance != null) {
+            log("Recopie déjà active : je la replace sur l'écran actuel des lunettes (pas de nouvelle demande).");
+            startService(new Intent(this, DepthService.class));
+            return;
+        }
         android.media.projection.MediaProjectionManager mpm = getSystemService(android.media.projection.MediaProjectionManager.class);
         startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE);
         log("Choisis « Tout l'écran » dans la demande de capture d'Android.");

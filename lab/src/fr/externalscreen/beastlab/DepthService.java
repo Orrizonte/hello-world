@@ -109,6 +109,7 @@ public final class DepthService extends Service {
 
     private int start(Intent intent) {
         instance = this;
+        if (projection != null) { event("recopie déjà active : rattachement à l'écran des lunettes"); reattach("relance"); return START_NOT_STICKY; }
         if (intent == null) { event("relancé sans jeton : arrêt"); stopSelf(); return START_NOT_STICKY; }
         event("service démarré (Android " + Build.VERSION.SDK_INT + ")");
         NotificationManager nm = getSystemService(NotificationManager.class);
@@ -129,13 +130,50 @@ public final class DepthService extends Service {
         } catch (RuntimeException e) { event("capture refusée : " + e); stopSelf(); return START_NOT_STICKY; }
         if (projection == null) { event("capture d'écran non accordée"); stopSelf(); return START_NOT_STICKY; }
         event("MediaProjection obtenue");
+        final MediaProjection mine = projection;
         projection.registerCallback(new MediaProjection.Callback() {
-            @Override public void onStop() { event("capture arrêtée par Android"); main.post(DepthService.this::stopSelf); }
+            @Override public void onStop() {
+                if (mine != projection) { event("ancienne capture arrêtée (ignoré)"); return; }
+                event("capture arrêtée par Android"); main.post(DepthService.this::stopSelf);
+            }
         }, main);
+        // the glasses re-create their display when switching 2D <-> 3D (1920 <-> 3840 wide):
+        // follow it instead of dying
+        getSystemService(DisplayManager.class).registerDisplayListener(displayListener, main);
         boolean shown;
         try { shown = showOnGlasses(); } catch (Throwable e) { event("affichage lunettes : " + e); shown = false; }
         if (!shown) { stopSelf(); return START_NOT_STICKY; }
         return START_NOT_STICKY;
+    }
+
+    private int shownOn = -1, shownW, shownH;
+    private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
+        @Override public void onDisplayAdded(int id) { main.postDelayed(() -> reattach("écran ajouté #" + id), 300); }
+        @Override public void onDisplayRemoved(int id) { if (id == shownOn) { event("écran des lunettes #" + id + " retiré"); detach(); } }
+        @Override public void onDisplayChanged(int id) {
+            if (id != shownOn) return;
+            Display d = getSystemService(DisplayManager.class).getDisplay(id);
+            if (d == null) return;
+            Display.Mode m = d.getMode();
+            if (m.getPhysicalWidth() != shownW || m.getPhysicalHeight() != shownH) reattach("mode changé " + m.getPhysicalWidth() + "x" + m.getPhysicalHeight());
+        }
+    };
+
+    private void detach() {
+        if (view != null && glassesWm != null) { try { glassesWm.removeViewImmediate(view); } catch (RuntimeException ignored) { } }
+        view = null; glassesWm = null; shownOn = -1;
+        stopGl();
+    }
+
+    private void reattach(String why) {
+        if (projection == null) return;
+        Display d = findGlasses();
+        if (d == null) { event(why + " : pas d'écran lunettes pour l'instant"); return; }
+        Display.Mode m = d.getMode();
+        if (d.getDisplayId() == shownOn && m.getPhysicalWidth() == shownW && m.getPhysicalHeight() == shownH && view != null) return;
+        event(why + " → nouvel affichage");
+        detach();
+        try { showOnGlasses(); } catch (Throwable e) { event("réaffichage : " + e); }
     }
 
     private Display findGlasses() {
@@ -152,6 +190,7 @@ public final class DepthService extends Service {
         Display d = findGlasses();
         if (d == null) { event("aucun écran externe « présentation » : les lunettes sont-elles branchées ?"); return false; }
         Display.Mode m = d.getMode();
+        shownOn = d.getDisplayId(); shownW = m.getPhysicalWidth(); shownH = m.getPhysicalHeight();
         event(String.format(Locale.US, "écran des lunettes : #%d « %s » %dx%d @ %.0f Hz", d.getDisplayId(), d.getName(),
             m.getPhysicalWidth(), m.getPhysicalHeight(), m.getRefreshRate()));
         if (!android.provider.Settings.canDrawOverlays(this)) { event("autorisation « superposition » manquante"); return false; }
@@ -191,6 +230,7 @@ public final class DepthService extends Service {
             glThread.start();
             gl = new Handler(glThread.getLooper());
         }
+        gl.removeCallbacks(renderLoop);
         gl.post(() -> {
             try {
                 if (eglDisplay == EGL14.EGL_NO_DISPLAY) initEgl();
@@ -280,7 +320,7 @@ public final class DepthService extends Service {
                 if (now - statStart >= 1000) {
                     float sec = (now - statStart) / 1000f;
                     stats = String.format(Locale.FRANCE, "capture %.0f img/s | rendu %.0f img/s | surface lunettes %dx%d | %s | écart %.0f px/œil | taille %.0f %% | GL err %d",
-                        framesIn / sec, framesOut / sec, surfW, surfH, sbs ? "3D côte à côte" : "2D", disparityPx, scale * 100, GLES20.glGetError());
+                        framesIn / sec, framesOut / sec, surfW, surfH, surfW > 2.5f * surfH ? "3D (une moitié par œil)" : "2D (écart sans effet)", disparityPx, scale * 100, GLES20.glGetError());
                     framesIn = 0; framesOut = 0; statStart = now;
                 }
             } catch (Throwable e) { event("rendu : " + e); return; }
@@ -300,7 +340,7 @@ public final class DepthService extends Service {
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex);
         GLES20.glUniformMatrix4fv(uSt, 1, false, st, 0);
         GLES20.glUniform1f(uPattern, testPattern ? 1f : 0f);
-        int eyes = sbs ? 2 : 1;
+        int eyes = surfW > 2.5f * surfH ? 2 : 1;
         int eyeW = surfW / eyes;
         for (int e = 0; e < eyes; e++) {
             GLES20.glViewport(e * eyeW, 0, eyeW, surfH);
@@ -308,7 +348,7 @@ public final class DepthService extends Service {
             float hN = 2f * scale;
             float wN = hN * ((float) capW / capH) * ((float) surfH / eyeW);
             // disparity: left eye image moves left for "farther" (+), right eye moves right
-            float shiftPx = sbs ? (e == 0 ? -disparityPx : disparityPx) : 0f;
+            float shiftPx = eyes == 2 ? (e == 0 ? -disparityPx : disparityPx) : 0f;
             float cx = 2f * shiftPx / eyeW, cy = 2f * offsetY;
             float x0 = cx - wN / 2, x1 = cx + wN / 2, y0 = cy - hN / 2, y1 = cy + hN / 2;
             quad.clear();
@@ -360,10 +400,12 @@ public final class DepthService extends Service {
 
     @Override public void onDestroy() {
         instance = null;
+        try { getSystemService(DisplayManager.class).unregisterDisplayListener(displayListener); } catch (RuntimeException ignored) { }
+        MediaProjection p0 = projection; projection = null;
         if (view != null && glassesWm != null) { try { glassesWm.removeViewImmediate(view); } catch (RuntimeException ignored) { } }
         stopGl();
         if (virtualDisplay != null) virtualDisplay.release();
-        if (projection != null) projection.stop();
+        if (p0 != null) p0.stop();
         if (glThread != null) {
             gl.post(() -> {
                 if (captureSurface != null) captureSurface.release();
